@@ -1,0 +1,30 @@
+[package]
+name = "weavatrix-rust-refactor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Evidence-backed refactor operations for Weavatrix: plan production, transactional application, and rollback"
+license = "MIT"
+repository = "https://github.com/sergii-ziborov/weavatrix-rust-refactor"
+homepage = "https://weavatrix.com"
+keywords = ["refactoring", "code-analysis", "rename", "transactional", "weavatrix"]
+categories = ["development-tools"]
+readme = "README.md"
+
+[lib]
+name = "weavatrix_rust_refactor"
+path = "src/lib.rs"
+
+[dependencies]
+blazingly-json = "0.1.0"
+weavatrix-rust = { version = "2.3.0", features = ["full"] }
+weavatrix-worktree = "0.2.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }

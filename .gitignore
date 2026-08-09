@@ -1,0 +1,6 @@
+/target/
+/npm/dist/
+*.tmp
+*.swp
+.DS_Store
+

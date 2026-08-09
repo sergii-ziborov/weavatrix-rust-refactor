@@ -1,0 +1,476 @@
+{
+  "contractVersion": 1,
+  "frozenFrom": {
+    "package": "weavatrix-refactor-js",
+    "version": "0.1.7",
+    "engine": "^0.3.15"
+  },
+  "note": "Recorded from the shipping JavaScript implementation. A Rust host is conformant when it exposes exactly these tool names with these schemas, and never emits a status outside resultStates. Additions require a contract version bump.",
+  "tools": [
+    {
+      "name": "rename_symbol",
+      "description": "Complete cross-language rename workflow: EXACT LSP backend for JS/TS, SQL schema backend for .sql, graph+lexical backend for Rust/Python/Go/Java/C#/Solidity. Default mode=\"preview\" proves the byte-exact edits and returns a single-use confirm_token; repeat the same call with mode=\"apply\" and that token for an atomic write with rollback. Requires WEAVATRIX_ALLOW_SOURCE_EDITS=1 only for apply.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Exact symbol id (file#name@line)"
+          },
+          "new_name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "apply"
+            ],
+            "default": "preview",
+            "description": "preview verifies the generated plan and returns a confirm_token; apply recomputes the same plan and consumes that token"
+          },
+          "confirm_token": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Required for mode=\"apply\"; single-use and bound to the exact generated plan and working tree"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "symbol",
+          "new_name"
+        ]
+      }
+    },
+    {
+      "name": "rename_related_symbols",
+      "description": "Complete coordinated JS/TS multi-symbol rename as ONE atomic workflow with conflict/chain/swap detection. Default mode=\"preview\" returns a plan-bound confirm_token; repeat with identical renames, mode=\"apply\", and that token to write atomically with rollback. Blocks entirely if any sub-rename fails.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "renames": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "properties": {
+                "symbol": {
+                  "type": "string"
+                },
+                "new_name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "symbol",
+                "new_name"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "apply"
+            ],
+            "default": "preview",
+            "description": "preview verifies the generated plan and returns a confirm_token; apply recomputes the same plan and consumes that token"
+          },
+          "confirm_token": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Required for mode=\"apply\"; single-use and bound to the exact generated plan and working tree"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "renames"
+        ]
+      }
+    },
+    {
+      "name": "apply_edit_plan",
+      "description": "Apply a weavatrix.edit-plan.v1 envelope (from a weavatrix-refactor-js plan producer or weavatrix-online plan_refactor) to the active repository. mode=\"preview\" (default) verifies hashes and before-texts and issues a single-use confirm_token; mode=\"apply\" consumes the token and writes atomically with an automatic rollback bundle. Requires WEAVATRIX_ALLOW_SOURCE_EDITS=1 to write. Only EXACT_LSP/RESOLVED/EXTRACTED/LEXICAL_EXACT edits are ever applied; uncertain references are reported, never guessed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "object",
+            "description": "The weavatrix.edit-plan.v1 envelope, verbatim as produced by the planning tool"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "apply"
+            ],
+            "default": "preview"
+          },
+          "confirm_token": {
+            "type": "string",
+            "description": "Required for mode=\"apply\"; issued by the preview step, single-use, 5-minute TTL"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "plan"
+        ]
+      }
+    },
+    {
+      "name": "rollback_last_apply",
+      "description": "Restore the repository files from the most recent apply_edit_plan rollback bundle. All-or-nothing: if any target file changed after the apply, nothing is restored and the drifted files are reported. Requires WEAVATRIX_ALLOW_SOURCE_EDITS=1.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        }
+      }
+    },
+    {
+      "name": "change_signature",
+      "description": "Add or remove a function/method parameter (JS/TS) with byte-exact call-site argument surgery. Always PARTIAL (call sites from graph edges); spread/value-add reported UNCERTAIN. operation: {kind:\"add_parameter\",name,default?} | {kind:\"remove_parameter\",index}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "object"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "symbol",
+          "operation"
+        ]
+      }
+    },
+    {
+      "name": "edit_symbol",
+      "description": "Symbol-anchored edit over the parser source range (all languages): replace_symbol_body | insert_before_symbol | insert_after_symbol. JS/TS results are parse-gated.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "replace_symbol_body",
+              "insert_before_symbol",
+              "insert_after_symbol"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "symbol",
+          "operation",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "bulk_replace",
+      "description": "Two-stage occurrence-selective pattern replace over the indexed universe. Preview (no selection) returns stable occurrence ids; then pass occurrence_ids or expected_count to plan. literal:true by default.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "replacement": {
+            "type": "string"
+          },
+          "literal": {
+            "type": "boolean",
+            "default": true
+          },
+          "flags": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "type": "string"
+          },
+          "occurrence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expected_count": {
+            "type": "integer"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "pattern",
+          "replacement"
+        ]
+      }
+    },
+    {
+      "name": "organize_imports",
+      "description": "Removes provably-unused named imports from a JS/TS file (a binding is removed only when its name occurs once in the file). Default/namespace imports are reported UNCERTAIN, never removed; sorting is left to the formatter.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "file"
+        ]
+      }
+    },
+    {
+      "name": "move_file",
+      "description": "Relocate a JS/TS file: rewrites the moved file own imports and every importer specifier, and reports the architecture dry-run (WOULD_VIOLATE/WOULD_IMPROVE). A review plan the agent applies (it renames a file), not an apply envelope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ]
+      }
+    },
+    {
+      "name": "move_symbol",
+      "description": "Dry-run for moving a declaration to another file: predicts introduced/removed runtime cycles and architecture violations plus the blast radius. PROJECTED from graph edges — no byte-exact edits; apply the mechanical move yourself and run verified_change.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "to_file": {
+            "type": "string"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "symbol",
+          "to_file"
+        ]
+      }
+    },
+    {
+      "name": "delete_readiness",
+      "description": "Per-symbol deletion verdict {safe: true|false|UNPROVEN, knownReferences, unknownDynamicUsages, confidence, reason} plus the deletion span. Exported symbols cap at UNPROVEN; always REVIEW_REQUIRED, never auto-delete.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "default": "text",
+            "description": "text returns concise TextContent; json also returns the stable structuredContent envelope"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      }
+    }
+  ],
+  "resultStates": {
+    "workflow": [
+      "PREVIEW_OK",
+      "PREVIEW_BLOCKED",
+      "WRITE_GATE_CLOSED",
+      "APPLIED",
+      "STALE",
+      "TOKEN_UNKNOWN",
+      "TOKEN_EXPIRED",
+      "TOKEN_PLAN_MISMATCH",
+      "TOKEN_REPOSITORY_MISMATCH",
+      "REPO_BUSY",
+      "ROLLED_BACK",
+      "ROLLBACK_INCOMPLETE",
+      "INVALID_PLAN"
+    ],
+    "arguments": [
+      "INVALID_ARGS",
+      "NO_REPOSITORY"
+    ],
+    "planner": [
+      "PLANNED",
+      "EVALUATED",
+      "PREVIEW",
+      "OK",
+      "NOT_FOUND",
+      "NO_CHANGE",
+      "NO_EDITS",
+      "CONFLICT",
+      "BLOCKED",
+      "UNPROVEN",
+      "NOT_SUPPORTED",
+      "NOT_A_SYMBOL",
+      "INVALID_NEW_NAME",
+      "INVALID_PATTERN",
+      "NO_SELECTION",
+      "UNKNOWN_OCCURRENCES",
+      "COUNT_MISMATCH",
+      "ZERO_WIDTH_UNSUPPORTED",
+      "NO_MATCHES",
+      "NO_UNUSED_IMPORTS",
+      "SOURCE_UNAVAILABLE",
+      "STALE_GRAPH",
+      "LSP_FAILED",
+      "FILE_TOO_LARGE",
+      "UNAVAILABLE",
+      "NOT_CONFIGURED"
+    ],
+    "completeness": [
+      "COMPLETE",
+      "PARTIAL"
+    ],
+    "provenance": [
+      "EXACT_LSP",
+      "RESOLVED",
+      "EXTRACTED",
+      "LEXICAL_EXACT"
+    ]
+  },
+  "editPlan": {
+    "schemaVersion": "weavatrix.edit-plan.v1",
+    "requiredFileFields": [
+      "path",
+      "sha256",
+      "edits"
+    ],
+    "requiredEditFields": [
+      "startLine",
+      "startChar",
+      "endLine",
+      "endChar",
+      "before",
+      "after",
+      "provenance"
+    ],
+    "envelopeFields": [
+      "schemaVersion",
+      "operation",
+      "createdAt",
+      "graphRevision",
+      "completeness",
+      "files",
+      "uncertainReferences",
+      "notModified",
+      "warnings",
+      "followUp"
+    ],
+    "fingerprintExcludes": [
+      "createdAt"
+    ]
+  },
+  "writeGates": [
+    "the refactor package is installed and its profile selects the edit capability",
+    "the server was started with WEAVATRIX_ALLOW_SOURCE_EDITS=1",
+    "the apply call presents a valid, unexpired, single-use token bound to the exact plan and repository"
+  ]
+}
