@@ -5,8 +5,11 @@
 //! the host can boot and expose the real eleven tools from day one, and each engine is replaced
 //! against the frozen contract instead of behind a flag that hides which half is live.
 
+mod delete_readiness;
+
 use crate::contract;
 use blazingly_json::{Value, json};
+use weavatrix_rust::RepositoryState;
 
 /// A refactor operation, resolved from a tool name the contract declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,11 +102,30 @@ pub fn catalog_names() -> Vec<String> {
 /// Returns an error only when `name` is not a tool the contract declares. Every other refusal
 /// is a value carrying a contract status, because an agent branches on statuses and cannot
 /// branch on a transport error.
-pub fn call(name: &str, _arguments: &Value) -> Result<Value, String> {
+pub fn call(state: &RepositoryState, name: &str, arguments: &Value) -> Result<Value, String> {
     let Some(operation) = Operation::from_name(name) else {
         return Err(format!("unknown refactor operation: {name}"));
     };
-    Ok(pending(operation))
+    Ok(match operation {
+        Operation::DeleteReadiness => delete_readiness::delete_readiness(state, arguments),
+        _ => pending(operation),
+    })
+}
+
+/// A missing or wrongly typed argument, named rather than described.
+///
+/// The engines below state their preconditions by returning this, never by panicking: an agent
+/// branches on a status and cannot branch on a crash.
+pub(crate) fn invalid_args(operation: &str, missing: &[&str]) -> Value {
+    json!({
+        "status": "INVALID_ARGS",
+        "operation": operation,
+        "invalid": missing,
+        "reason": format!(
+            "missing or invalid required argument(s): {}. Nothing was planned or written.",
+            missing.join(", ")
+        ),
+    })
 }
 
 /// The honest answer while an engine is still being ported.
@@ -159,21 +181,27 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_engine_answers_with_a_contract_status_not_an_error() {
-        let answer = call("rename_symbol", &blazingly_json::json!({})).expect("declared tool");
-        let status = answer
-            .get("status")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        assert!(
-            contract::permits_state(status),
-            "{status} is outside the contract"
-        );
+    fn every_operation_answers_with_a_contract_status_ported_or_not() {
+        let state = crate::test_support::fixture_state();
+        for tool in contract::tools() {
+            let answer =
+                call(&state, &tool.name, &blazingly_json::json!({})).expect("declared tool");
+            let status = answer
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            assert!(
+                contract::permits_state(status),
+                "{} answered {status}, which is outside the contract",
+                tool.name
+            );
+        }
     }
 
     #[test]
     fn an_undeclared_tool_is_an_error_not_a_status() {
-        assert!(call("reformat_universe", &blazingly_json::json!({})).is_err());
+        let state = crate::test_support::fixture_state();
+        assert!(call(&state, "reformat_universe", &blazingly_json::json!({})).is_err());
     }
 
     #[test]
