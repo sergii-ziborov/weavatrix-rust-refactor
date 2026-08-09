@@ -104,7 +104,13 @@ fn engines_refuse_with_a_status_instead_of_panicking() {
             continue;
         }
         let production = production_only(&text);
-        for forbidden in ["panic!", ".unwrap()", "unreachable!", "todo!", "unimplemented!"] {
+        for forbidden in [
+            "panic!",
+            ".unwrap()",
+            "unreachable!",
+            "todo!",
+            "unimplemented!",
+        ] {
             assert!(
                 !production.contains(forbidden),
                 "{} uses {forbidden}: an agent branches on a status and cannot branch on a crash",

@@ -705,6 +705,7 @@ dependencies = [
  "blazingly-json",
  "tempfile",
  "weavatrix-graph",
+ "weavatrix-refactor-plan",
  "weavatrix-rust",
  "weavatrix-worktree",
 ]

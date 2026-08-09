@@ -5,11 +5,71 @@
 //! the host can boot and expose the real eleven tools from day one, and each engine is replaced
 //! against the frozen contract instead of behind a flag that hides which half is live.
 
+mod apply;
 mod delete_readiness;
 
 use crate::contract;
+use crate::token::TokenStore;
 use blazingly_json::{Value, json};
 use weavatrix_rust::RepositoryState;
+
+/// One server's refactor surface: the confirmations it has issued and whether it may write.
+///
+/// The write gate lives here rather than at each call site so there is exactly one place that
+/// decides it, and it is fixed when the session is created — a gate re-read per call could be
+/// changed underneath a running server.
+pub struct RefactorSession {
+    tokens: TokenStore,
+    write_allowed: bool,
+}
+
+impl RefactorSession {
+    /// Opens a session. `write_allowed` is the environment gate, already decided by the host.
+    #[must_use]
+    pub fn new(write_allowed: bool) -> Self {
+        Self {
+            tokens: TokenStore::default(),
+            write_allowed,
+        }
+    }
+
+    /// A session that will never write, for callers that only plan.
+    ///
+    /// Named rather than a bare `new(false)` so a caller that meant to pass a real gate cannot
+    /// silently get a closed one — which is exactly the bug this replaced.
+    #[must_use]
+    pub fn read_only() -> Self {
+        Self::new(false)
+    }
+
+    /// Calls one refactor operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when `name` is not a tool the contract declares. Every other
+    /// refusal is a value carrying a contract status, because an agent branches on statuses and
+    /// cannot branch on a transport error.
+    pub fn call(
+        &self,
+        state: &RepositoryState,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<Value, String> {
+        let Some(operation) = Operation::from_name(name) else {
+            return Err(format!("unknown refactor operation: {name}"));
+        };
+        Ok(match operation {
+            Operation::DeleteReadiness => delete_readiness::delete_readiness(state, arguments),
+            Operation::ApplyEditPlan => {
+                apply::apply_edit_plan(state.root(), &self.tokens, arguments, self.write_allowed)
+            }
+            Operation::RollbackLastApply => {
+                apply::rollback_last_apply(state.root(), self.write_allowed)
+            }
+            _ => pending(operation),
+        })
+    }
+}
 
 /// A refactor operation, resolved from a tool name the contract declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,13 +163,7 @@ pub fn catalog_names() -> Vec<String> {
 /// is a value carrying a contract status, because an agent branches on statuses and cannot
 /// branch on a transport error.
 pub fn call(state: &RepositoryState, name: &str, arguments: &Value) -> Result<Value, String> {
-    let Some(operation) = Operation::from_name(name) else {
-        return Err(format!("unknown refactor operation: {name}"));
-    };
-    Ok(match operation {
-        Operation::DeleteReadiness => delete_readiness::delete_readiness(state, arguments),
-        _ => pending(operation),
-    })
+    RefactorSession::read_only().call(state, name, arguments)
 }
 
 /// A missing or wrongly typed argument, named rather than described.

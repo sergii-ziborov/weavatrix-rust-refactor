@@ -19,11 +19,13 @@
 //! bound to that exact plan and repository. Nothing in this crate writes without them.
 
 pub mod contract;
+pub mod envelope;
 pub mod evidence;
 pub mod operations;
 pub mod resolve;
 #[cfg(test)]
 mod test_support;
+pub mod token;
 
 /// Version of this crate, reported by the host beside the engine version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
