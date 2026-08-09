@@ -21,6 +21,7 @@ blazingly-json = "0.1.0"
 # structurally identical ones that will not convert.
 weavatrix-graph = "0.6.3"
 weavatrix-rust = { version = "2.3.0", features = ["full"] }
+weavatrix-parse = "0.3.0"
 weavatrix-refactor-plan = "0.1.1"
 weavatrix-worktree = "0.2.0"
 

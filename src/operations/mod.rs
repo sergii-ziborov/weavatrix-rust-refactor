@@ -7,6 +7,7 @@
 
 mod apply;
 mod delete_readiness;
+mod edit_symbol;
 
 use crate::contract;
 use crate::token::TokenStore;
@@ -60,6 +61,7 @@ impl RefactorSession {
         };
         Ok(match operation {
             Operation::DeleteReadiness => delete_readiness::delete_readiness(state, arguments),
+            Operation::EditSymbol => edit_symbol::edit_symbol(state, arguments),
             Operation::ApplyEditPlan => {
                 apply::apply_edit_plan(state.root(), &self.tokens, arguments, self.write_allowed)
             }
@@ -164,6 +166,27 @@ pub fn catalog_names() -> Vec<String> {
 /// branch on a transport error.
 pub fn call(state: &RepositoryState, name: &str, arguments: &Value) -> Result<Value, String> {
     RefactorSession::read_only().call(state, name, arguments)
+}
+
+/// The symbol an agent named is not in the graph.
+pub(crate) fn not_found(symbol: &str) -> Value {
+    json!({
+        "status": "NOT_FOUND",
+        "reason": "the selected symbol is not present in the active graph, or the name matches \
+                   more than one symbol; pass an exact id",
+        "symbol": symbol,
+    })
+}
+
+/// The graph and the file no longer agree, so no range from it can be trusted.
+pub(crate) fn stale_graph(file: &str) -> Value {
+    json!({
+        "status": "STALE_GRAPH",
+        "reason": format!(
+            "{file}: the recorded source range no longer matches the file. Rebuild the graph; \
+             nothing was planned from a range that cannot be located."
+        ),
+    })
 }
 
 /// A missing or wrongly typed argument, named rather than described.

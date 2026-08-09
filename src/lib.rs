@@ -19,9 +19,12 @@
 //! bound to that exact plan and repository. Nothing in this crate writes without them.
 
 pub mod contract;
+pub mod coordinates;
+pub mod declaration;
 pub mod envelope;
 pub mod evidence;
 pub mod operations;
+pub mod plan;
 pub mod resolve;
 #[cfg(test)]
 mod test_support;
