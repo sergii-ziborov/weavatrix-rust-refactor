@@ -26,6 +26,7 @@ pub mod evidence;
 pub mod operations;
 pub mod plan;
 pub mod resolve;
+pub mod specifier;
 #[cfg(test)]
 mod test_support;
 pub mod token;
