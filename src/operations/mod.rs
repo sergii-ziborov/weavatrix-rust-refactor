@@ -6,6 +6,7 @@
 //! against the frozen contract instead of behind a flag that hides which half is live.
 
 mod apply;
+mod bulk_replace;
 mod delete_readiness;
 mod edit_symbol;
 
@@ -62,6 +63,7 @@ impl RefactorSession {
         Ok(match operation {
             Operation::DeleteReadiness => delete_readiness::delete_readiness(state, arguments),
             Operation::EditSymbol => edit_symbol::edit_symbol(state, arguments),
+            Operation::BulkReplace => bulk_replace::bulk_replace(state, arguments),
             Operation::ApplyEditPlan => {
                 apply::apply_edit_plan(state.root(), &self.tokens, arguments, self.write_allowed)
             }

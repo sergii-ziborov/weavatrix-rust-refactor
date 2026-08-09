@@ -19,6 +19,7 @@ path = "src/lib.rs"
 blazingly-json = "0.1.0"
 # Pinned to the version weavatrix-rust resolves, so both see one graph type rather than two
 # structurally identical ones that will not convert.
+regex = "1"
 weavatrix-graph = "0.6.3"
 weavatrix-rust = { version = "2.3.0", features = ["full"] }
 weavatrix-parse = "0.3.0"
