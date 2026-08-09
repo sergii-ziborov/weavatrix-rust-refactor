@@ -9,6 +9,7 @@ mod apply;
 mod bulk_replace;
 mod delete_readiness;
 mod edit_symbol;
+mod move_symbol;
 
 use crate::contract;
 use crate::token::TokenStore;
@@ -64,6 +65,7 @@ impl RefactorSession {
             Operation::DeleteReadiness => delete_readiness::delete_readiness(state, arguments),
             Operation::EditSymbol => edit_symbol::edit_symbol(state, arguments),
             Operation::BulkReplace => bulk_replace::bulk_replace(state, arguments),
+            Operation::MoveSymbol => move_symbol::move_symbol(state, arguments),
             Operation::ApplyEditPlan => {
                 apply::apply_edit_plan(state.root(), &self.tokens, arguments, self.write_allowed)
             }
