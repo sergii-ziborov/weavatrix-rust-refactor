@@ -278,6 +278,93 @@ fn the_call_site_inside_a_calling_function_is_renamed_too() {
     );
 }
 
+/// The benchmark's string trap: the fixture's caller carries the name inside a string literal
+/// on an `export` line. The import-line widening put that line into the proven set, the textual
+/// scan cannot tell an identifier from the same characters inside quotes, and the literal got
+/// corrupted. A site now needs the tokenizer's word, not just the graph's line.
+#[test]
+fn a_string_literal_on_a_proven_line_is_reported_not_renamed() {
+    let root = repository(
+        "stringtrap",
+        &[
+            ("src/lib.rs", "pub mod core;\npub mod caller;\n"),
+            (
+                "src/core.rs",
+                "pub fn resolve_target(value: u32) -> u32 {\n    value + 1\n}\n",
+            ),
+            (
+                "src/caller.rs",
+                "use crate::core::resolve_target;\n\npub const HELP: &str = \"call resolve_target with a value\";\n\npub fn run() -> u32 {\n    resolve_target(1)\n}\n",
+            ),
+        ],
+    );
+    let engine = Weavatrix::open(&root).expect("opens");
+    let state = engine.state().clone();
+    let session = RefactorSession::new(true);
+    let Some(id) = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| {
+            node.label.starts_with("resolve_target")
+                && node
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.file == "src/core.rs")
+        })
+        .map(|node| node.id.as_str().to_owned())
+    else {
+        return;
+    };
+    let planned = session
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({"symbol": id, "new_name": "locate_target"}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&planned), "PLANNED", "{planned:?}");
+    let plan = planned.get("plan").expect("plan").clone();
+    let preview = session
+        .call(&state, "apply_edit_plan", &json!({"plan": plan.clone()}))
+        .expect("declared tool");
+    let Some(token) = preview.get("confirmToken").and_then(Value::as_str) else {
+        panic!("{preview:?}");
+    };
+    let applied = session
+        .call(
+            &state,
+            "apply_edit_plan",
+            &json!({"plan": plan, "mode": "apply", "confirm_token": token.to_owned()}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&applied), "APPLIED", "{applied:?}");
+
+    let caller = fs::read_to_string(root.join("src/caller.rs")).expect("caller");
+    assert!(
+        caller.contains("\"call resolve_target with a value\""),
+        "the string literal must survive the rename, got {caller:?}"
+    );
+    assert!(
+        caller.contains("use crate::core::locate_target;") && caller.contains("locate_target(1)"),
+        "the import and the call must still be renamed, got {caller:?}"
+    );
+    let uncertain = planned
+        .get("uncertainReferences")
+        .and_then(Value::as_array)
+        .expect("uncertain");
+    assert!(
+        uncertain.iter().any(|entry| {
+            entry.get("file").and_then(Value::as_str) == Some("src/caller.rs")
+                && entry
+                    .get("excerpt")
+                    .and_then(Value::as_str)
+                    .is_some_and(|excerpt| excerpt.contains("HELP"))
+        }),
+        "the string occurrence has to be reported rather than dropped: {uncertain:?}"
+    );
+}
+
 #[test]
 fn unproven_same_named_occurrences_are_reported_rather_than_renamed() {
     let root = repository("uncertain", &FILES);

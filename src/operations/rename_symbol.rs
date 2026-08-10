@@ -16,6 +16,7 @@ use crate::plan::{PlanBuilder, sha256_of};
 use crate::resolve::resolve_symbol;
 use blazingly_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use weavatrix_parse::{Language, TokenKind, tokenize};
 use weavatrix_rust::{EdgeKind, NodeKind, RepositoryState};
 
 /// Relations that mean "this site uses that symbol", as opposed to containing it.
@@ -159,6 +160,46 @@ fn import_lines(source: &str, name: &str) -> BTreeSet<u32> {
         .collect()
 }
 
+/// Occurrences of `name` the tokenizer proves are identifiers, as 1-based byte columns by line.
+///
+/// A textual scan cannot tell `resolveTarget` the identifier from `resolveTarget` inside
+/// `'call resolveTarget'` — the word boundaries are identical. The tokenizer can, and the
+/// benchmark's string trap is the case where the difference is an edit that corrupts a literal.
+/// `None` when the file's language is unknown; the caller then falls back to the textual scan,
+/// which is the pre-existing behaviour for such files.
+fn identifier_occurrences(
+    source: &str,
+    path: &str,
+    name: &str,
+) -> Option<BTreeMap<u32, Vec<(u32, u32)>>> {
+    let language = Language::from_extension(path.rsplit_once('.')?.1)?;
+    let mut line_starts = vec![0_usize];
+    for (index, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            line_starts.push(index + 1);
+        }
+    }
+    let mut by_line: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
+    for token in tokenize(source, language) {
+        if token.kind != TokenKind::Identifier || token.text(source) != name {
+            continue;
+        }
+        let Some(&line_start) =
+            line_starts.get(usize::try_from(token.line).ok()?.saturating_sub(1))
+        else {
+            continue;
+        };
+        let (Ok(start), Ok(end)) = (
+            u32::try_from(token.start - line_start + 1),
+            u32::try_from(token.end - line_start + 1),
+        ) else {
+            continue;
+        };
+        by_line.entry(token.line).or_default().push((start, end));
+    }
+    Some(by_line)
+}
+
 /// One identifier to rewrite: a line and the UTF-16 range holding the name on it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Site {
@@ -273,19 +314,27 @@ pub(super) fn sites(
 
 /// Splits one file's occurrences into the proven sites and the ones this must not touch.
 ///
-/// The two halves belong together because they partition the same file. An occurrence is either
-/// on a line the graph attributes to this symbol — a site — or it is not, and then it is
-/// reported. Nothing is silently dropped, which is what makes the uncertain list trustworthy.
+/// A site needs two proofs: the graph attributes the line to this symbol, and the tokenizer
+/// says the occurrence is an identifier rather than the same characters inside a string. Every
+/// textual occurrence that did not become a site is reported, so nothing is silently dropped —
+/// which is what makes the uncertain list trustworthy.
 fn collect_file(found: &mut Rename, path: &str, source: &str, proven: &BTreeSet<u32>) {
+    let identifiers = identifier_occurrences(source, path, &found.old_name);
     let mut sites = Vec::new();
+    let mut accepted: BTreeSet<(u32, u32, u32)> = BTreeSet::new();
     for line in proven {
-        for (start_column, end_column) in occurrences_on_line(source, *line, &found.old_name) {
+        let ranges = match &identifiers {
+            Some(by_line) => by_line.get(line).cloned().unwrap_or_default(),
+            None => occurrences_on_line(source, *line, &found.old_name),
+        };
+        for (start_column, end_column) in ranges {
             let (Ok(start), Ok(end)) = (
                 utf16_offset(source, *line, start_column),
                 utf16_offset(source, *line, end_column),
             ) else {
                 continue;
             };
+            accepted.insert((*line, start_column, end_column));
             sites.push(Site {
                 line: *line,
                 start,
@@ -298,19 +347,22 @@ fn collect_file(found: &mut Rename, path: &str, source: &str, proven: &BTreeSet<
             .files
             .insert(path.to_owned(), (sha256_of(source), sites));
     }
-    // Occurrences outside a graph-proven line are exactly what a find-replace would rename and
-    // this must not: they may belong to a different symbol that happens to share the name.
+    // Everything textual that was not planned: occurrences on unproven lines may belong to a
+    // different symbol sharing the name, and occurrences inside strings or comments on proven
+    // lines are prose. Both would be renamed by a find-replace, and neither is here.
     for (number, text) in source.split('\n').enumerate() {
         let line = u32::try_from(number + 1).unwrap_or(u32::MAX);
-        if proven.contains(&line) || occurrences_on_line(source, line, &found.old_name).is_empty() {
-            continue;
+        let unplanned = occurrences_on_line(source, line, &found.old_name)
+            .into_iter()
+            .any(|(start, end)| !accepted.contains(&(line, start, end)));
+        if unplanned {
+            found.uncertain.push(json!({
+                "file": path,
+                "line": line,
+                "kind": "UNPROVEN_OCCURRENCE",
+                "excerpt": text.trim(),
+            }));
         }
-        found.uncertain.push(json!({
-            "file": path,
-            "line": line,
-            "kind": "UNPROVEN_OCCURRENCE",
-            "excerpt": text.trim(),
-        }));
     }
 }
 
