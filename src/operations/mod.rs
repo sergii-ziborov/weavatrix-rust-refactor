@@ -1,12 +1,16 @@
 //! The refactor operation surface.
 //!
-//! Dispatch is deliberately total: every frozen tool has an arm, and an engine that has not
-//! landed yet answers `NOT_SUPPORTED` with the reason. That is the shape the migration needs —
-//! the host can boot and expose the real eleven tools from day one, and each engine is replaced
-//! against the frozen contract instead of behind a flag that hides which half is live.
+//! Dispatch is total and every arm is a native engine — all eleven of the frozen tools answer
+//! for themselves, and the match has no fallback arm, so adding a tool to the contract fails to
+//! compile rather than quietly returning "not supported" at run time.
+//!
+//! `NOT_SUPPORTED` survives as a per-call answer where an engine genuinely cannot prove
+//! something about the input it was given — a symbol the graph records under a name that is not
+//! an identifier, for instance. It is never the answer for a tool as a whole.
 
 mod apply;
 mod bulk_replace;
+mod change_signature;
 mod delete_readiness;
 mod edit_symbol;
 mod move_file;
@@ -14,6 +18,7 @@ mod move_symbol;
 mod organize_imports;
 mod rename_related;
 mod rename_symbol;
+mod signature;
 
 use crate::contract;
 use crate::token::TokenStore;
@@ -85,7 +90,7 @@ impl RefactorSession {
             Operation::RollbackLastApply => {
                 apply::rollback_last_apply(state.root(), self.write_allowed)
             }
-            Operation::ChangeSignature => pending(operation),
+            Operation::ChangeSignature => change_signature::change_signature(state, arguments),
         })
     }
 }
@@ -141,8 +146,9 @@ impl Operation {
         )
     }
 
+    /// The tool name this operation answers to.
     #[must_use]
-    const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::RenameSymbol => "rename_symbol",
             Self::RenameRelatedSymbols => "rename_related_symbols",
@@ -219,24 +225,6 @@ pub(crate) fn invalid_args(operation: &str, missing: &[&str]) -> Value {
             "missing or invalid required argument(s): {}. Nothing was planned or written.",
             missing.join(", ")
         ),
-    })
-}
-
-/// The honest answer while an engine is still being ported.
-///
-/// `NOT_SUPPORTED` is a contract status, so a client that already handles the JavaScript host
-/// handles this without a change; the reason says which implementation to use meanwhile.
-fn pending(operation: Operation) -> Value {
-    json!({
-        "status": "NOT_SUPPORTED",
-        "operation": operation.name(),
-        "reason": format!(
-            "{} has not been ported to the native engine yet; use weavatrix-refactor-js for this \
-             operation until it lands",
-            operation.name()
-        ),
-        "writes": operation.writes(),
-        "contractVersion": crate::CONTRACT_VERSION,
     })
 }
 

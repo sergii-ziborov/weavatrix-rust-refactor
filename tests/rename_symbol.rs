@@ -219,6 +219,65 @@ fn applying_the_plan_leaves_the_shadowed_declaration_untouched() {
     );
 }
 
+/// The graph records a symbol's span as its declaration line, and a call lives in the body one
+/// line further down. Reading that span literally renamed the declaration and nothing else, which
+/// looked like a working rename until you opened the caller.
+#[test]
+fn the_call_site_inside_a_calling_function_is_renamed_too() {
+    let root = repository("callsite", &FILES);
+    let engine = Weavatrix::open(&root).expect("opens");
+    let state = engine.state().clone();
+    let session = RefactorSession::new(true);
+    let Some(id) = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| {
+            node.label.starts_with("resolve_target")
+                && node
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.file == "src/core.rs")
+        })
+        .map(|node| node.id.as_str().to_owned())
+    else {
+        return;
+    };
+    let planned = session
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({"symbol": id, "new_name": "locate_target"}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&planned), "PLANNED", "{planned:?}");
+    let plan = planned.get("plan").expect("plan").clone();
+    let preview = session
+        .call(&state, "apply_edit_plan", &json!({"plan": plan.clone()}))
+        .expect("declared tool");
+    let Some(token) = preview.get("confirmToken").and_then(Value::as_str) else {
+        panic!("{preview:?}");
+    };
+    let applied = session
+        .call(
+            &state,
+            "apply_edit_plan",
+            &json!({"plan": plan, "mode": "apply", "confirm_token": token.to_owned()}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&applied), "APPLIED", "{applied:?}");
+
+    let caller = fs::read_to_string(root.join("src/caller.rs")).expect("caller");
+    assert!(
+        caller.contains("locate_target(1)"),
+        "the call has to be renamed with the declaration, got {caller:?}"
+    );
+    assert!(
+        !caller.contains("use crate::core::resolve_target"),
+        "an import left naming the old symbol is a rename that broke the build, got {caller:?}"
+    );
+}
+
 #[test]
 fn unproven_same_named_occurrences_are_reported_rather_than_renamed() {
     let root = repository("uncertain", &FILES);

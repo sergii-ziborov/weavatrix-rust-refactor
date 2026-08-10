@@ -25,6 +25,26 @@ pub struct DeclarationRange {
     pub end_proven: bool,
 }
 
+/// The 1-based line range the declaration named `name` occupies, body included.
+///
+/// The graph records a symbol's span as its declaration line alone, so a caller that asks it
+/// "where does `run` reference this?" is told line 3 while the call sits on line 4. Anything
+/// looking for a reference *inside* a symbol has to widen that span to the body, which is what
+/// this does — and it refuses to widen past an end it could not prove, since guessing there
+/// would sweep in whatever follows the function.
+#[must_use]
+pub fn body_lines(source: &str, path: &str, name: &str, line: u32) -> (u32, u32) {
+    let Some(range) = locate(source, path, name, line).filter(|range| range.end_proven) else {
+        return (line, line);
+    };
+    let line_of = |offset: usize| {
+        u32::try_from(source[..offset.min(source.len())].matches('\n').count() + 1)
+            .unwrap_or(u32::MAX)
+    };
+    let start = line_of(range.start);
+    (start, line_of(range.end).max(start))
+}
+
 /// Finds the declaration named `name` whose signature begins on `line`.
 ///
 /// The line disambiguates same-named declarations in one file, which is why it is required

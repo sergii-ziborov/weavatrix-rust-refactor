@@ -16,7 +16,7 @@ use crate::plan::{PlanBuilder, sha256_of};
 use crate::resolve::resolve_symbol;
 use blazingly_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use weavatrix_rust::{EdgeKind, RepositoryState};
+use weavatrix_rust::{EdgeKind, NodeKind, RepositoryState};
 
 /// Relations that mean "this site uses that symbol", as opposed to containing it.
 fn is_use(kind: &EdgeKind) -> bool {
@@ -65,22 +65,21 @@ fn occurrences_on_line(source: &str, line: u32, name: &str) -> Vec<(u32, u32)> {
     hits
 }
 
-/// Files and lines the graph proves reference this symbol, plus the declaration's own line.
-fn reference_lines(
+/// The symbols the graph proves reference this one, by file: each one's name and declaring line.
+///
+/// A use edge points at the *referencing symbol*, and the graph records that symbol's span as its
+/// declaration line alone. The reference itself sits somewhere in the body, so the caller widens
+/// each of these to its body range once the file has been read.
+pub(super) fn referencing_symbols(
     state: &RepositoryState,
     id: &str,
-    declaring: (&str, u32),
-) -> BTreeMap<String, BTreeSet<u32>> {
-    let mut by_file: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-    by_file
-        .entry(declaring.0.to_owned())
-        .or_default()
-        .insert(declaring.1);
+) -> BTreeMap<String, Vec<(String, u32)>> {
+    let mut by_file: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
     for edge in state.graph().edges() {
         if !is_use(&edge.kind) || edge.target.as_str() != id {
             continue;
         }
-        let Some(source_node) = state
+        let Some(node) = state
             .graph()
             .nodes()
             .iter()
@@ -88,17 +87,76 @@ fn reference_lines(
         else {
             continue;
         };
-        let Some(span) = source_node.span.as_ref() else {
+        let Some(span) = node.span.as_ref() else {
             continue;
         };
-        // A use edge points at the referencing symbol, whose span is its own declaration line.
-        // The reference itself may sit anywhere inside that symbol, so its whole range is
-        // searched rather than only its first line.
-        for line in span.start.line..=span.end.line.max(span.start.line) {
-            by_file.entry(span.file.clone()).or_default().insert(line);
-        }
+        by_file.entry(span.file.clone()).or_default().push((
+            node.label.trim_end_matches("()").to_owned(),
+            span.start.line,
+        ));
     }
     by_file
+}
+
+/// Every line of a file the graph attributes to this symbol.
+fn proven_lines(source: &str, path: &str, referencing: &[(String, u32)]) -> BTreeSet<u32> {
+    let mut lines = BTreeSet::new();
+    for (name, line) in referencing {
+        let (from, to) = crate::declaration::body_lines(source, path, name, *line);
+        lines.extend(from..=to);
+    }
+    lines
+}
+
+/// Files the graph proves import the one that declares the symbol.
+fn importing_files(state: &RepositoryState, declaring: &str) -> BTreeSet<String> {
+    let Some(target) = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| node.kind == NodeKind::File && node.label == declaring)
+    else {
+        return BTreeSet::new();
+    };
+    state
+        .graph()
+        .edges()
+        .iter()
+        .filter(|edge| {
+            matches!(edge.kind, EdgeKind::Imports) && edge.target.as_str() == target.id.as_str()
+        })
+        .filter_map(|edge| {
+            state
+                .graph()
+                .nodes()
+                .iter()
+                .find(|node| node.id.as_str() == edge.source.as_str())
+                .map(|node| node.label.clone())
+        })
+        .collect()
+}
+
+/// Lines of an import statement, which in an importing file name this symbol and no other.
+///
+/// Without these a rename leaves the file importing a name that no longer exists — the call was
+/// updated and the import was not. The proof is the graph's own import edge: this file brings in
+/// the file that declares the symbol, so the name on its import line is that symbol.
+fn import_lines(source: &str, name: &str) -> BTreeSet<u32> {
+    source
+        .split('\n')
+        .enumerate()
+        .filter(|(_, text)| {
+            let head = text.trim_start();
+            ["import ", "use ", "pub use ", "from ", "export "]
+                .iter()
+                .any(|keyword| head.starts_with(keyword))
+        })
+        .filter(|(number, _)| {
+            let line = u32::try_from(number + 1).unwrap_or(u32::MAX);
+            !occurrences_on_line(source, line, name).is_empty()
+        })
+        .map(|(number, _)| u32::try_from(number + 1).unwrap_or(u32::MAX))
+        .collect()
 }
 
 /// One identifier to rewrite: a line and the UTF-16 range holding the name on it.
@@ -170,14 +228,23 @@ pub(super) fn sites(
     };
 
     let id = node.id.as_str().to_owned();
-    let lines = reference_lines(state, &id, (&file, span.start.line));
+    let mut referencing = referencing_symbols(state, &id);
+    // The declaration itself is a site, and its own body is where a recursive call would be.
+    referencing
+        .entry(file.clone())
+        .or_default()
+        .push((old_name.clone(), span.start.line));
+    let importing = importing_files(state, &file);
+    for path in &importing {
+        referencing.entry(path.clone()).or_default();
+    }
     let mut found = Rename {
         old_name,
         new_name: new_name.to_owned(),
         files: BTreeMap::new(),
         uncertain: Vec::new(),
     };
-    for (path, proven) in &lines {
+    for (path, symbols) in &referencing {
         let Some(source) = read_source(state.root(), path) else {
             found.uncertain.push(json!({
                 "file": path,
@@ -185,7 +252,11 @@ pub(super) fn sites(
             }));
             continue;
         };
-        collect_file(&mut found, path, &source, proven);
+        let mut proven = proven_lines(&source, path, symbols);
+        if importing.contains(path) {
+            proven.extend(import_lines(&source, &found.old_name));
+        }
+        collect_file(&mut found, path, &source, &proven);
     }
     if found.edits() == 0 {
         return Err(json!({
