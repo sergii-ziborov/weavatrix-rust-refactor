@@ -41,19 +41,41 @@ has an operation arm, and no operation exists outside the contract.
 Changing a name, a schema or a status means changing the contract file, and that
 is a contract-version decision rather than an implementation detail.
 
-## Migration status
+## Operations
 
-The catalog is complete and live; the engines land one at a time. An operation
-that has not been ported answers `NOT_SUPPORTED` — itself a contract status — with
-a reason naming `weavatrix-refactor-js` as the implementation to use meanwhile.
-Nothing is hidden behind a flag, so a client can always tell which half is native.
+All eleven are native. Dispatch has no fallback arm, so a tool added to the
+contract fails to compile rather than answering "not supported" at run time.
 
-| Area | State |
-| --- | --- |
-| Frozen contract, catalog, dispatch | done |
-| Safety kernel (containment, UTF-16 ranges, fingerprints, tokens, locking, atomic write, rollback) | provided by `weavatrix-edit` / `weavatrix-worktree` |
-| Graph-native planners (rename, SQL rename, bulk replace, symbol edit, move review, delete readiness) | pending |
-| JavaScript/TypeScript signature, imports and exact rename | pending, last by design |
+| Operation | Backend | What it proves |
+| --- | --- | --- |
+| `rename_symbol` | graph + lexical | The declaration, every site the graph proves calls or references it, and the import lines of files the graph proves import the declaring file |
+| `rename_related_symbols` | the same, merged | One transaction for several renames, with collision and contested-site detection; chains and swaps apply simultaneously rather than in sequence |
+| `change_signature` | graph + token-split lists | A parameter added or removed, with the argument at each proven call site |
+| `organize_imports` | occurrence count | Named JS/TS bindings whose identifier occurs once in the file |
+| `edit_symbol` | parser range | A symbol-anchored replacement or insertion, parse-gated for JS/TS |
+| `bulk_replace` | lexical | Literal or regex matches outside strings and comments |
+| `move_file` | specifier arithmetic | The file, plus the relative import specifiers that pointed at it |
+| `move_symbol` | graph | A move reviewed against its dependencies before anything is written |
+| `delete_readiness` | graph | Whether anything still depends on the symbol |
+| `apply_edit_plan` | `weavatrix-worktree` | Preview, single-use token, atomic write with retained contents |
+| `rollback_last_apply` | `weavatrix-worktree` | The previous contents, restored |
+
+### What "PARTIAL" means here
+
+No planner claims `COMPLETE`. Every call site comes from a graph edge, so these
+operations prove the sites they edit — they cannot prove the *absence* of other
+references. A same-named occurrence the graph does not vouch for is reported as an
+`UNPROVEN_OCCURRENCE` rather than edited, which is the whole difference between
+renaming a symbol and find-replacing a string.
+
+`NOT_SUPPORTED` survives only as a per-call answer where an engine cannot prove
+something about the input it was given — a symbol the graph records under a name
+that is not an identifier, for instance. It is never the answer for a whole tool.
+
+Outside JavaScript and TypeScript, `organize_imports` reports candidates and
+answers `UNPROVEN` instead of planning. `use std::io::Write` is used by calling
+`write_all` and never by naming `Write`, and a Python import in `__init__.py` is
+often the public API; both pass an occurrence count and both break on removal.
 
 ## Safety boundary
 
