@@ -101,61 +101,178 @@ fn reference_lines(
     by_file
 }
 
-/// Plans one file: renames on graph-proven lines, reports every other same-named occurrence.
+/// One identifier to rewrite: a line and the UTF-16 range holding the name on it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Site {
+    pub line: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Everything one rename resolved to, before any of it becomes an envelope.
+///
+/// The sites are kept apart from the plan so a coordinated rename can merge several of these and
+/// find the places where two renames collide — which is impossible once each has been flattened
+/// into its own envelope.
+pub(super) struct Rename {
+    pub old_name: String,
+    pub new_name: String,
+    /// Path to its content hash and the sites within it, in file order.
+    pub files: BTreeMap<String, (String, Vec<Site>)>,
+    pub uncertain: Vec<Value>,
+}
+
+impl Rename {
+    /// How many identifiers this rename rewrites.
+    pub fn edits(&self) -> usize {
+        self.files.values().map(|(_, sites)| sites.len()).sum()
+    }
+}
+
+/// Finds every site one rename touches, or the refusal that stops it.
+///
+/// Both entry points come through here, so a symbol that `rename_symbol` refuses is refused
+/// identically inside a batch — the alternative is a batch that quietly renames what the single
+/// operation would not.
+pub(super) fn sites(
+    state: &RepositoryState,
+    symbol: &str,
+    new_name: &str,
+) -> Result<Rename, Value> {
+    if !is_identifier(new_name) {
+        return Err(json!({
+            "status": "INVALID_NEW_NAME",
+            "reason": format!("{new_name:?} is not a valid identifier"),
+        }));
+    }
+    let Some(index) = resolve_symbol(state.graph(), symbol) else {
+        return Err(super::not_found(symbol));
+    };
+    let Some(node) = state.graph().node_at(index) else {
+        return Err(super::not_found(symbol));
+    };
+    let old_name = node.label.trim_end_matches("()").to_owned();
+    if !is_identifier(&old_name) {
+        return Err(json!({
+            "status": "NOT_SUPPORTED",
+            "reason": format!(
+                "the graph records this symbol as {:?}, which is not a plain identifier; rename \
+                 needs one to anchor its edits",
+                node.label
+            ),
+        }));
+    }
+    if old_name == new_name {
+        return Err(json!({"status": "NO_CHANGE", "reason": "the symbol already has that name"}));
+    }
+    let (Some(file), Some(span)) = (declaring_file(node), node.span.as_ref()) else {
+        return Err(super::not_found(symbol));
+    };
+
+    let id = node.id.as_str().to_owned();
+    let lines = reference_lines(state, &id, (&file, span.start.line));
+    let mut found = Rename {
+        old_name,
+        new_name: new_name.to_owned(),
+        files: BTreeMap::new(),
+        uncertain: Vec::new(),
+    };
+    for (path, proven) in &lines {
+        let Some(source) = read_source(state.root(), path) else {
+            found.uncertain.push(json!({
+                "file": path,
+                "reason": "the file is unreadable, so its references were not planned",
+            }));
+            continue;
+        };
+        collect_file(&mut found, path, &source, proven);
+    }
+    if found.edits() == 0 {
+        return Err(json!({
+            "status": "NO_EDITS",
+            "reason": format!(
+                "{} was not found on any line the graph attributes to this symbol; rebuild the \
+                 graph if the file changed",
+                found.old_name
+            ),
+        }));
+    }
+    Ok(found)
+}
+
+/// Splits one file's occurrences into the proven sites and the ones this must not touch.
 ///
 /// The two halves belong together because they partition the same file. An occurrence is either
-/// on a line the graph attributes to this symbol — planned — or it is not, and then it is
+/// on a line the graph attributes to this symbol — a site — or it is not, and then it is
 /// reported. Nothing is silently dropped, which is what makes the uncertain list trustworthy.
-fn plan_file(
-    mut builder: PlanBuilder,
-    path: &str,
-    source: &str,
-    proven: &BTreeSet<u32>,
-    names: (&str, &str),
-    uncertain: &mut Vec<Value>,
-) -> (PlanBuilder, usize) {
-    let (old_name, new_name) = names;
-    let mut edits = 0_usize;
-    let mut opened = false;
+fn collect_file(found: &mut Rename, path: &str, source: &str, proven: &BTreeSet<u32>) {
+    let mut sites = Vec::new();
     for line in proven {
-        for (start_column, end_column) in occurrences_on_line(source, *line, old_name) {
-            let (Ok(start_char), Ok(end_char)) = (
+        for (start_column, end_column) in occurrences_on_line(source, *line, &found.old_name) {
+            let (Ok(start), Ok(end)) = (
                 utf16_offset(source, *line, start_column),
                 utf16_offset(source, *line, end_column),
             ) else {
                 continue;
             };
-            if !opened {
-                builder = builder.file(path, &sha256_of(source));
-                opened = true;
-            }
-            builder = builder.edit(
-                *line,
-                start_char,
-                *line,
-                end_char,
-                old_name.to_owned(),
-                new_name.to_owned(),
-                "RESOLVED",
-            );
-            edits += 1;
+            sites.push(Site {
+                line: *line,
+                start,
+                end,
+            });
         }
+    }
+    if !sites.is_empty() {
+        found
+            .files
+            .insert(path.to_owned(), (sha256_of(source), sites));
     }
     // Occurrences outside a graph-proven line are exactly what a find-replace would rename and
     // this must not: they may belong to a different symbol that happens to share the name.
     for (number, text) in source.split('\n').enumerate() {
         let line = u32::try_from(number + 1).unwrap_or(u32::MAX);
-        if proven.contains(&line) || occurrences_on_line(source, line, old_name).is_empty() {
+        if proven.contains(&line) || occurrences_on_line(source, line, &found.old_name).is_empty() {
             continue;
         }
-        uncertain.push(json!({
+        found.uncertain.push(json!({
             "file": path,
             "line": line,
             "kind": "UNPROVEN_OCCURRENCE",
             "excerpt": text.trim(),
         }));
     }
-    (builder, edits)
+}
+
+/// One site with the names it rewrites, kept together while several renames are merged.
+type PlacedEdit<'a> = (Site, &'a str, &'a str);
+
+/// A file's content hash and every edit landing in it, from however many renames.
+type FileEdits<'a> = (&'a str, Vec<PlacedEdit<'a>>);
+
+/// Folds one or more renames into a single envelope, ordered by file and then by position.
+pub(super) fn build_plan(operation: &str, renames: &[Rename]) -> Value {
+    let mut by_file: BTreeMap<&str, FileEdits<'_>> = BTreeMap::new();
+    for rename in renames {
+        for (path, (hash, sites)) in &rename.files {
+            let entry = by_file.entry(path).or_insert((hash, Vec::new()));
+            for site in sites {
+                entry
+                    .1
+                    .push((*site, rename.old_name.as_str(), rename.new_name.as_str()));
+            }
+        }
+    }
+    let mut builder = PlanBuilder::new(operation);
+    for (path, (hash, mut sites)) in by_file {
+        sites.sort_by_key(|(site, _, _)| *site);
+        builder = builder.file(path, hash);
+        for (site, before, after) in sites {
+            builder = builder.edit(
+                site.line, site.start, site.line, site.end, before, after, "RESOLVED",
+            );
+        }
+    }
+    builder.build()
 }
 
 pub(super) fn rename_symbol(state: &RepositoryState, arguments: &Value) -> Value {
@@ -164,84 +281,20 @@ pub(super) fn rename_symbol(state: &RepositoryState, arguments: &Value) -> Value
     let (Some(symbol), Some(new_name)) = (symbol, new_name) else {
         return super::invalid_args("rename_symbol", &["symbol", "new_name"]);
     };
-    if !is_identifier(new_name) {
-        return json!({
-            "status": "INVALID_NEW_NAME",
-            "reason": format!("{new_name:?} is not a valid identifier"),
-        });
-    }
-    let Some(index) = resolve_symbol(state.graph(), symbol) else {
-        return super::not_found(symbol);
+    let found = match sites(state, symbol, new_name) {
+        Ok(found) => found,
+        Err(refusal) => return refusal,
     };
-    let Some(node) = state.graph().node_at(index) else {
-        return super::not_found(symbol);
-    };
-    let old_name = node.label.trim_end_matches("()").to_owned();
-    if !is_identifier(&old_name) {
-        return json!({
-            "status": "NOT_SUPPORTED",
-            "reason": format!(
-                "the graph records this symbol as {:?}, which is not a plain identifier; rename \
-                 needs one to anchor its edits",
-                node.label
-            ),
-        });
-    }
-    if old_name == new_name {
-        return json!({"status": "NO_CHANGE", "reason": "the symbol already has that name"});
-    }
-    let Some(file) = declaring_file(node) else {
-        return super::not_found(symbol);
-    };
-    let Some(span) = node.span.as_ref() else {
-        return super::not_found(symbol);
-    };
-
-    let id = node.id.as_str().to_owned();
-    let lines = reference_lines(state, &id, (&file, span.start.line));
-    let mut builder = PlanBuilder::new("rename_symbol");
-    let mut edits = 0_usize;
-    let mut uncertain = Vec::new();
-
-    for (path, line_numbers) in &lines {
-        let Some(source) = read_source(state.root(), path) else {
-            uncertain.push(json!({
-                "file": path,
-                "reason": "the file is unreadable, so its references were not planned",
-            }));
-            continue;
-        };
-        let planned = plan_file(
-            builder,
-            path,
-            &source,
-            line_numbers,
-            (&old_name, new_name),
-            &mut uncertain,
-        );
-        builder = planned.0;
-        edits += planned.1;
-    }
-
-    if edits == 0 {
-        return json!({
-            "status": "NO_EDITS",
-            "reason": format!(
-                "{old_name} was not found on any line the graph attributes to this symbol; \
-                 rebuild the graph if the file changed"
-            ),
-        });
-    }
     json!({
         "status": "PLANNED",
         // Never COMPLETE: this backend proves the sites it renames, not the absence of others.
         "completeness": "PARTIAL",
         "backend": "graph+lexical",
-        "oldName": old_name,
-        "newName": new_name,
-        "renamedEdits": edits,
-        "plan": builder.build(),
-        "uncertainReferences": uncertain,
+        "oldName": found.old_name,
+        "newName": found.new_name,
+        "renamedEdits": found.edits(),
+        "plan": build_plan("rename_symbol", std::slice::from_ref(&found)),
+        "uncertainReferences": found.uncertain,
         "warnings": ["GRAPH_PROVEN_SITES_ONLY"],
         "next": "apply with apply_edit_plan (preview -> confirm). Every uncertainReference is a \
                  same-named occurrence this backend refused to guess at; review them yourself.",

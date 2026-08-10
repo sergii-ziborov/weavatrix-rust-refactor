@@ -11,6 +11,7 @@ mod delete_readiness;
 mod edit_symbol;
 mod move_file;
 mod move_symbol;
+mod rename_related;
 mod rename_symbol;
 
 use crate::contract;
@@ -70,6 +71,12 @@ impl RefactorSession {
             Operation::MoveSymbol => move_symbol::move_symbol(state, arguments),
             Operation::MoveFile => move_file::move_file(state, arguments),
             Operation::RenameSymbol => rename_symbol::rename_symbol(state, arguments),
+            Operation::RenameRelatedSymbols => rename_related::rename_related_symbols(
+                state,
+                &self.tokens,
+                arguments,
+                self.write_allowed,
+            ),
             Operation::ApplyEditPlan => {
                 apply::apply_edit_plan(state.root(), &self.tokens, arguments, self.write_allowed)
             }
