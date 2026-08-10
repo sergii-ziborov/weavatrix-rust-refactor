@@ -365,6 +365,77 @@ fn a_string_literal_on_a_proven_line_is_reported_not_renamed() {
     );
 }
 
+/// A call inside a template-literal interpolation is code; the same name in a plain template
+/// string is prose. The tokenizer emits `${...}` as one Interpolation token, so an
+/// identifier-only filter dropped the call — the fix re-tokenizes interpolation contents.
+#[test]
+fn a_call_inside_a_template_interpolation_is_renamed_and_a_plain_template_is_not() {
+    let root = repository(
+        "template",
+        &[
+            (
+                "src/core.js",
+                "export function resolveTarget(selector) {\n  return `/${resolveTarget(selector)}` + `resolveTarget`;\n}\n",
+            ),
+            (
+                "src/caller.js",
+                "import { resolveTarget } from './core.js';\n\nexport const OUT = resolveTarget('x');\n",
+            ),
+        ],
+    );
+    let engine = Weavatrix::open(&root).expect("opens");
+    let state = engine.state().clone();
+    let session = RefactorSession::new(true);
+    let Some(id) = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| {
+            node.label.trim_end_matches("()") == "resolveTarget"
+                && node
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.file == "src/core.js")
+        })
+        .map(|node| node.id.as_str().to_owned())
+    else {
+        return;
+    };
+    let planned = session
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({"symbol": id, "new_name": "locateTarget"}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&planned), "PLANNED", "{planned:?}");
+    let plan = planned.get("plan").expect("plan").clone();
+    let preview = session
+        .call(&state, "apply_edit_plan", &json!({"plan": plan.clone()}))
+        .expect("declared tool");
+    let Some(token) = preview.get("confirmToken").and_then(Value::as_str) else {
+        panic!("{preview:?}");
+    };
+    let applied = session
+        .call(
+            &state,
+            "apply_edit_plan",
+            &json!({"plan": plan, "mode": "apply", "confirm_token": token.to_owned()}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&applied), "APPLIED", "{applied:?}");
+
+    let core = fs::read_to_string(root.join("src/core.js")).expect("core");
+    assert!(
+        core.contains("`/${locateTarget(selector)}`"),
+        "the call inside the interpolation is code and must be renamed, got {core:?}"
+    );
+    assert!(
+        core.contains("`resolveTarget`"),
+        "the plain template string is prose and must survive, got {core:?}"
+    );
+}
+
 #[test]
 fn unproven_same_named_occurrences_are_reported_rather_than_renamed() {
     let root = repository("uncertain", &FILES);

@@ -160,6 +160,85 @@ fn import_lines(source: &str, name: &str) -> BTreeSet<u32> {
         .collect()
 }
 
+/// Byte offsets of `name` wherever the tokenizer proves it is an identifier.
+///
+/// The expression inside a template interpolation is code — `` `/${resolveTarget(x)}` `` calls
+/// the function as surely as a bare call does — but the tokenizer emits the whole template,
+/// interpolations included, as one `String` token. So template tokens are searched for balanced
+/// `${...}` sections and each interior is re-tokenized recursively, while every other string
+/// stays prose. Depth-limited because templates can nest.
+fn identifier_offsets(
+    slice: &str,
+    base: usize,
+    language: Language,
+    name: &str,
+    out: &mut Vec<(usize, usize)>,
+    depth: u8,
+) {
+    if depth > 4 {
+        return;
+    }
+    for token in tokenize(slice, language) {
+        match token.kind {
+            TokenKind::Identifier if token.text(slice) == name => {
+                out.push((base + token.start, base + token.end));
+            }
+            TokenKind::String | TokenKind::Interpolation => {
+                let text = token.text(slice);
+                if !text.starts_with('`') && token.kind == TokenKind::String {
+                    continue;
+                }
+                for (inner_start, inner_end) in interpolation_sections(text) {
+                    if let Some(inner) = text.get(inner_start..inner_end) {
+                        identifier_offsets(
+                            inner,
+                            base + token.start + inner_start,
+                            language,
+                            name,
+                            out,
+                            depth + 1,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The interiors of every balanced `${...}` in a template literal's text.
+fn interpolation_sections(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut sections = Vec::new();
+    let mut at = 0_usize;
+    while at + 1 < bytes.len() {
+        if bytes[at] == b'\\' {
+            at += 2;
+            continue;
+        }
+        if bytes[at] == b'$' && bytes[at + 1] == b'{' {
+            let mut braces = 1_i32;
+            let mut close = at + 2;
+            while close < bytes.len() && braces > 0 {
+                match bytes[close] {
+                    b'{' => braces += 1,
+                    b'}' => braces -= 1,
+                    b'\\' => close += 1,
+                    _ => {}
+                }
+                close += 1;
+            }
+            if braces == 0 {
+                sections.push((at + 2, close - 1));
+                at = close;
+                continue;
+            }
+        }
+        at += 1;
+    }
+    sections
+}
+
 /// Occurrences of `name` the tokenizer proves are identifiers, as 1-based byte columns by line.
 ///
 /// A textual scan cannot tell `resolveTarget` the identifier from `resolveTarget` inside
@@ -173,6 +252,9 @@ fn identifier_occurrences(
     name: &str,
 ) -> Option<BTreeMap<u32, Vec<(u32, u32)>>> {
     let language = Language::from_extension(path.rsplit_once('.')?.1)?;
+    let mut offsets = Vec::new();
+    identifier_offsets(source, 0, language, name, &mut offsets, 0);
+
     let mut line_starts = vec![0_usize];
     for (index, byte) in source.bytes().enumerate() {
         if byte == b'\n' {
@@ -180,22 +262,17 @@ fn identifier_occurrences(
         }
     }
     let mut by_line: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
-    for token in tokenize(source, language) {
-        if token.kind != TokenKind::Identifier || token.text(source) != name {
-            continue;
-        }
-        let Some(&line_start) =
-            line_starts.get(usize::try_from(token.line).ok()?.saturating_sub(1))
-        else {
-            continue;
-        };
-        let (Ok(start), Ok(end)) = (
-            u32::try_from(token.start - line_start + 1),
-            u32::try_from(token.end - line_start + 1),
+    for (start, end) in offsets {
+        let line_index = line_starts.partition_point(|&at| at <= start) - 1;
+        let line_start = line_starts[line_index];
+        let (Ok(line), Ok(start), Ok(end)) = (
+            u32::try_from(line_index + 1),
+            u32::try_from(start - line_start + 1),
+            u32::try_from(end - line_start + 1),
         ) else {
             continue;
         };
-        by_line.entry(token.line).or_default().push((start, end));
+        by_line.entry(line).or_default().push((start, end));
     }
     Some(by_line)
 }
