@@ -11,6 +11,7 @@ mod delete_readiness;
 mod edit_symbol;
 mod move_file;
 mod move_symbol;
+mod organize_imports;
 mod rename_related;
 mod rename_symbol;
 
@@ -70,6 +71,7 @@ impl RefactorSession {
             Operation::BulkReplace => bulk_replace::bulk_replace(state, arguments),
             Operation::MoveSymbol => move_symbol::move_symbol(state, arguments),
             Operation::MoveFile => move_file::move_file(state, arguments),
+            Operation::OrganizeImports => organize_imports::organize_imports(state, arguments),
             Operation::RenameSymbol => rename_symbol::rename_symbol(state, arguments),
             Operation::RenameRelatedSymbols => rename_related::rename_related_symbols(
                 state,
@@ -83,7 +85,7 @@ impl RefactorSession {
             Operation::RollbackLastApply => {
                 apply::rollback_last_apply(state.root(), self.write_allowed)
             }
-            _ => pending(operation),
+            Operation::ChangeSignature => pending(operation),
         })
     }
 }
