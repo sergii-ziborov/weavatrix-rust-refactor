@@ -509,11 +509,11 @@ pub(super) fn rename_symbol(
     // this answer. The agent then applies with the token alone — it never has to echo back the
     // plan bytes it just received, which the benchmark measured as the largest single cost of
     // the whole flow.
-    if let Some(preview) = preview_plan(state, tokens, answer.get("plan")) {
-        if let (Some(object), Some(extra)) = (answer.as_object_mut(), preview.as_object()) {
-            for (key, value) in extra {
-                object.insert(key.clone(), value.clone());
-            }
+    if let Some(preview) = preview_plan(state, tokens, answer.get("plan"))
+        && let (Some(object), Some(extra)) = (answer.as_object_mut(), preview.as_object())
+    {
+        for (key, value) in extra {
+            object.insert(key.clone(), value.clone());
         }
     }
     answer
