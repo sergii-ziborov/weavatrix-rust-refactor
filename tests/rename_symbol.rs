@@ -247,7 +247,7 @@ fn an_ambiguous_refusal_names_its_candidates() {
 }
 
 /// The rename previews its own plan and hands over the confirmation, so the whole flow is two
-/// calls and the agent never echoes plan bytes back: rename -> apply {confirm_token}.
+/// calls and the agent never echoes plan bytes back: rename, then apply with `confirm_token`.
 #[test]
 fn applying_with_the_token_alone_writes_the_previewed_plan() {
     let root = repository("tokenonly", &FILES);
