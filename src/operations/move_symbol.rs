@@ -114,10 +114,10 @@ pub(super) fn move_symbol(state: &RepositoryState, arguments: &Value) -> Value {
         return super::invalid_args("move_symbol", &["symbol", "to_file"]);
     };
     let Some(index) = resolve_symbol(state.graph(), symbol) else {
-        return super::not_found(symbol);
+        return super::not_found(state.graph(), symbol);
     };
     let Some(node) = state.graph().node_at(index) else {
-        return super::not_found(symbol);
+        return super::not_found(state.graph(), symbol);
     };
     let Some(from) = declaring_file(node) else {
         return json!({

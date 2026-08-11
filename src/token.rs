@@ -26,6 +26,12 @@ struct Issued {
     fingerprint: String,
     repository: String,
     expires_at: u64,
+    /// The previewed plan itself, so an apply can present the token alone.
+    ///
+    /// Without this the agent echoes the whole plan back — bytes it just received, paid again
+    /// as completion tokens. The token already proves which plan was previewed; storing the
+    /// plan makes that proof executable.
+    plan: EditPlan,
 }
 
 /// The issued confirmations of one server process.
@@ -93,10 +99,63 @@ impl TokenStore {
                     fingerprint,
                     repository: repository.display().to_string(),
                     expires_at,
+                    plan: plan.clone(),
                 },
             );
         }
         ConfirmToken { value, expires_at }
+    }
+
+    /// Consumes a confirmation presented alone and returns the plan it previewed.
+    ///
+    /// The checks are the ones `consume` makes, minus the fingerprint comparison — there is no
+    /// second copy of the plan to compare, which is the point: the stored plan *is* the one the
+    /// fingerprint was computed from.
+    ///
+    /// # Errors
+    ///
+    /// Returns the contract refusal — `TOKEN_UNKNOWN`, `TOKEN_EXPIRED` or
+    /// `TOKEN_REPOSITORY_MISMATCH` — when the confirmation cannot be honoured. The token is
+    /// spent either way, so a caller cannot probe with the same value twice.
+    pub fn consume_for_plan(
+        &self,
+        presented: Option<&str>,
+        repository: &Path,
+    ) -> Result<EditPlan, Value> {
+        let Some(presented) = presented else {
+            return Err(json!({
+                "status": "TOKEN_UNKNOWN",
+                "reason": "mode=\"apply\" requires the confirm_token issued by a preview. \
+                           Nothing was written.",
+            }));
+        };
+        let Ok(mut issued) = self.0.lock() else {
+            return Err(json!({
+                "status": "TOKEN_UNKNOWN",
+                "reason": "the token store is unavailable. Nothing was written.",
+            }));
+        };
+        let Some(token) = issued.remove(presented) else {
+            return Err(json!({
+                "status": "TOKEN_UNKNOWN",
+                "reason": "the confirmation is not one this server issued, or it was already \
+                           used. Nothing was written.",
+            }));
+        };
+        if token.expires_at <= now() {
+            return Err(json!({
+                "status": "TOKEN_EXPIRED",
+                "reason": "the confirmation expired; preview again to get a fresh one. Nothing \
+                           was written.",
+            }));
+        }
+        if token.repository != repository.display().to_string() {
+            return Err(json!({
+                "status": "TOKEN_REPOSITORY_MISMATCH",
+                "reason": "the confirmation belongs to a different repository. Nothing was written.",
+            }));
+        }
+        Ok(token.plan)
     }
 
     /// Consumes a confirmation, or returns the refusal that says why it could not be.

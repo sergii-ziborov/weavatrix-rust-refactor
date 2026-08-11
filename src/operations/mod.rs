@@ -191,13 +191,21 @@ pub fn call(state: &RepositoryState, name: &str, arguments: &Value) -> Result<Va
     RefactorSession::read_only().call(state, name, arguments)
 }
 
-/// The symbol an agent named is not in the graph.
-pub(crate) fn not_found(symbol: &str) -> Value {
+/// The symbol an agent named is not in the graph, with every id it could have meant.
+///
+/// The candidates ride in the refusal because without them the refusal costs a round trip: the
+/// agent has to run a graph query — measured at ~26 KB — to learn ids the resolver already saw.
+pub(crate) fn not_found(graph: &weavatrix_graph::Graph, symbol: &str) -> Value {
+    let candidates = crate::resolve::candidate_ids(graph, symbol);
     json!({
         "status": "NOT_FOUND",
-        "reason": "the selected symbol is not present in the active graph, or the name matches \
-                   more than one symbol; pass an exact id",
+        "reason": if candidates.len() > 1 {
+            "the name matches more than one symbol; pass one of the candidate ids"
+        } else {
+            "the selected symbol is not present in the active graph; pass an exact id"
+        },
         "symbol": symbol,
+        "candidates": candidates,
     })
 }
 

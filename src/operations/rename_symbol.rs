@@ -322,10 +322,10 @@ pub(super) fn sites(
         }));
     }
     let Some(index) = resolve_symbol(state.graph(), symbol) else {
-        return Err(super::not_found(symbol));
+        return Err(super::not_found(state.graph(), symbol));
     };
     let Some(node) = state.graph().node_at(index) else {
-        return Err(super::not_found(symbol));
+        return Err(super::not_found(state.graph(), symbol));
     };
     let old_name = node.label.trim_end_matches("()").to_owned();
     if !is_identifier(&old_name) {
@@ -342,7 +342,7 @@ pub(super) fn sites(
         return Err(json!({"status": "NO_CHANGE", "reason": "the symbol already has that name"}));
     }
     let (Some(file), Some(span)) = (declaring_file(node), node.span.as_ref()) else {
-        return Err(super::not_found(symbol));
+        return Err(super::not_found(state.graph(), symbol));
     };
 
     let id = node.id.as_str().to_owned();

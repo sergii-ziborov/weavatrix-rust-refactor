@@ -26,6 +26,23 @@ pub fn resolve_symbol(graph: &Graph, query: &str) -> Option<NodeIndex> {
     Some(indexed(first.0))
 }
 
+/// Every id the query could have meant, for the refusal that asks for an exact one.
+///
+/// Without this list the refusal costs an extra round trip: the agent has to run a graph query —
+/// measured at ~26 KB of response — to learn ids the resolver already saw and threw away. The
+/// list is capped because an agent disambiguates between a handful, not a hundred.
+#[must_use]
+pub fn candidate_ids(graph: &Graph, query: &str) -> Vec<String> {
+    const MOST: usize = 8;
+    graph
+        .nodes()
+        .iter()
+        .filter(|node| node.label == query || node.id.as_str().ends_with(query))
+        .map(|node| node.id.as_str().to_owned())
+        .take(MOST)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_symbol;

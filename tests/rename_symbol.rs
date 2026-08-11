@@ -219,6 +219,82 @@ fn applying_the_plan_leaves_the_shadowed_declaration_untouched() {
     );
 }
 
+/// The refusal for an ambiguous bare name carries the candidate ids, so disambiguation costs
+/// zero extra calls — the agent picks from the refusal instead of running a graph query.
+#[test]
+fn an_ambiguous_refusal_names_its_candidates() {
+    let root = repository("candidates", &FILES);
+    let answer = call(
+        &root,
+        &json!({"symbol": "resolve_target", "new_name": "locate_target"}),
+    );
+    assert_eq!(status(&answer), "NOT_FOUND", "{answer:?}");
+    let candidates = answer
+        .get("candidates")
+        .and_then(Value::as_array)
+        .expect("candidates");
+    assert!(
+        candidates.len() >= 2,
+        "both same-named declarations have to be offered: {candidates:?}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|id| id.contains("core.rs")),
+        "{candidates:?}"
+    );
+}
+
+/// An apply may present the confirmation alone: the preview already carried the plan, and making
+/// the agent echo it back is paying for the same bytes twice.
+#[test]
+fn applying_with_the_token_alone_writes_the_previewed_plan() {
+    let root = repository("tokenonly", &FILES);
+    let engine = Weavatrix::open(&root).expect("opens");
+    let state = engine.state().clone();
+    let session = RefactorSession::new(true);
+    let Some(id) = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| {
+            node.label.starts_with("resolve_target")
+                && node
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.file == "src/core.rs")
+        })
+        .map(|node| node.id.as_str().to_owned())
+    else {
+        return;
+    };
+    let planned = session
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({"symbol": id, "new_name": "locate_target"}),
+        )
+        .expect("declared tool");
+    let plan = planned.get("plan").expect("plan").clone();
+    let preview = session
+        .call(&state, "apply_edit_plan", &json!({"plan": plan}))
+        .expect("declared tool");
+    let Some(token) = preview.get("confirmToken").and_then(Value::as_str) else {
+        panic!("{preview:?}");
+    };
+    let applied = session
+        .call(
+            &state,
+            "apply_edit_plan",
+            &json!({"mode": "apply", "confirm_token": token.to_owned()}),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&applied), "APPLIED", "{applied:?}");
+    let core = fs::read_to_string(root.join("src/core.rs")).expect("core");
+    assert!(core.contains("locate_target"), "got {core:?}");
+}
+
 /// The graph records a symbol's span as its declaration line, and a call lives in the body one
 /// line further down. Reading that span literally renamed the declaration and nothing else, which
 /// looked like a working rename until you opened the caller.

@@ -62,12 +62,35 @@ fn is_stale(error: &WorktreeError) -> bool {
 }
 
 /// `apply_edit_plan`: preview verifies, apply writes.
+///
+/// An apply may present the confirmation alone. The preview already carried the plan to the
+/// agent; making it echo the plan back is paying for the same bytes twice, the second time as
+/// completion tokens. The token names exactly one previewed plan, so the server supplies it.
 pub(super) fn apply_edit_plan(
     root: &std::path::Path,
     tokens: &TokenStore,
     arguments: &Value,
     write_allowed: bool,
 ) -> Value {
+    let apply = arguments.get("mode").and_then(Value::as_str) == Some("apply");
+    let presented = arguments.get("confirm_token").and_then(Value::as_str);
+    if apply && arguments.get("plan").is_none() {
+        if !write_allowed {
+            return json!({
+                "status": "WRITE_GATE_CLOSED",
+                "reason": "the server was started without source edits enabled",
+            });
+        }
+        let plan = match tokens.consume_for_plan(presented, root) {
+            Ok(plan) => plan,
+            Err(refusal) => return refusal,
+        };
+        let tree = match worktree(root) {
+            Ok(tree) => tree,
+            Err(refusal) => return refusal,
+        };
+        return write_plan(&tree, &plan);
+    }
     let Some(plan_value) = arguments.get("plan") else {
         return super::invalid_args("apply_edit_plan", &["plan"]);
     };
@@ -80,7 +103,6 @@ pub(super) fn apply_edit_plan(
             });
         }
     };
-    let apply = arguments.get("mode").and_then(Value::as_str) == Some("apply");
     let tree = match worktree(root) {
         Ok(tree) => tree,
         Err(refusal) => return refusal,
@@ -124,11 +146,15 @@ pub(super) fn apply_edit_plan(
             "reason": "the server was started without source edits enabled",
         });
     }
-    let presented = arguments.get("confirm_token").and_then(Value::as_str);
     if let Some(refusal) = tokens.consume(presented, &plan, root) {
         return refusal;
     }
-    match tree.apply_plan_retained(&as_worktree_plan(&plan), UndoRetention::default()) {
+    write_plan(&tree, &plan)
+}
+
+/// Writes a plan whose gates have all been passed, retaining the previous contents.
+fn write_plan(tree: &Worktree, plan: &EditPlan) -> Value {
+    match tree.apply_plan_retained(&as_worktree_plan(plan), UndoRetention::default()) {
         Ok(report) => json!({
             "status": "APPLIED",
             "transactionId": report.apply().transaction_id(),

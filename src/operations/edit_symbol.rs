@@ -45,10 +45,10 @@ struct Anchor {
 /// Resolves the symbol to a declaration in a readable file, or the refusal that says why not.
 fn anchor(state: &RepositoryState, symbol: &str) -> Result<Anchor, Value> {
     let Some(index) = resolve_symbol(state.graph(), symbol) else {
-        return Err(super::not_found(symbol));
+        return Err(super::not_found(state.graph(), symbol));
     };
     let Some(node) = state.graph().node_at(index) else {
-        return Err(super::not_found(symbol));
+        return Err(super::not_found(state.graph(), symbol));
     };
     let Some(span) = node.span.as_ref() else {
         return Err(json!({
@@ -59,7 +59,7 @@ fn anchor(state: &RepositoryState, symbol: &str) -> Result<Anchor, Value> {
         }));
     };
     let Some(file) = declaring_file(node) else {
-        return Err(super::not_found(symbol));
+        return Err(super::not_found(state.graph(), symbol));
     };
     let Some(source) = read_source(state.root(), &file) else {
         return Err(json!({

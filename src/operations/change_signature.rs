@@ -319,14 +319,14 @@ pub(super) fn change_signature(state: &RepositoryState, arguments: &Value) -> Va
         Err(refusal) => return refusal,
     };
     let Some(index) = resolve_symbol(state.graph(), symbol) else {
-        return super::not_found(symbol);
+        return super::not_found(state.graph(), symbol);
     };
     let Some(node) = state.graph().node_at(index) else {
-        return super::not_found(symbol);
+        return super::not_found(state.graph(), symbol);
     };
     let name = node.label.trim_end_matches("()").to_owned();
     let (Some(path), Some(span)) = (declaring_file(node), node.span.as_ref()) else {
-        return super::not_found(symbol);
+        return super::not_found(state.graph(), symbol);
     };
     let Some(source) = Source::open(state.root(), &path) else {
         return json!({
