@@ -691,7 +691,7 @@ dependencies = [
 [[package]]
 name = "weavatrix-rust"
 version = "2.5.1"
-source = "git+https://github.com/sergii-ziborov/weavatrix-rust.git?rev=5e67ce7dc05ce2f39c4e29f6e9a25cd9721ee2e9#5e67ce7dc05ce2f39c4e29f6e9a25cd9721ee2e9"
+source = "git+https://github.com/sergii-ziborov/weavatrix-rust.git?rev=6f4b130761d1e5bdfa599b72a76324e13db0b018#6f4b130761d1e5bdfa599b72a76324e13db0b018"
 dependencies = [
  "blazingly-json",
  "proc-macro2",
