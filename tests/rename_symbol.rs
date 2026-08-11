@@ -185,7 +185,7 @@ fn applying_the_plan_leaves_the_shadowed_declaration_untouched() {
         .call(
             &state,
             "rename_symbol",
-            &json!({"symbol": id, "new_name": "locate_target"}),
+            &json!({"symbol": id.clone(), "new_name": "locate_target"}),
         )
         .expect("declared tool");
     if status(&planned) != "PLANNED" {
@@ -287,13 +287,70 @@ fn applying_with_the_token_alone_writes_the_previewed_plan() {
     let applied = session
         .call(
             &state,
-            "apply_edit_plan",
-            &json!({"mode": "apply", "confirm_token": token.to_owned()}),
+            "rename_symbol",
+            &json!({
+                "symbol": id,
+                "new_name": "locate_target",
+                "mode": "apply",
+                "confirm_token": token.to_owned(),
+            }),
         )
         .expect("declared tool");
     assert_eq!(status(&applied), "APPLIED", "{applied:?}");
     let core = fs::read_to_string(root.join("src/core.rs")).expect("core");
     assert!(core.contains("locate_target"), "got {core:?}");
+}
+
+/// Planning is a read. A session without write authorization must still be able to prove the
+/// exact rename and issue its plan-bound confirmation; only consuming it is a write.
+#[test]
+fn a_closed_gate_previews_the_rename_and_refuses_only_apply() {
+    let root = repository("closedpreview", &FILES);
+    let engine = Weavatrix::open(&root).expect("opens");
+    let state = engine.state().clone();
+    let session = RefactorSession::read_only();
+    let Some(id) = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| {
+            node.label.starts_with("resolve_target")
+                && node
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.file == "src/core.rs")
+        })
+        .map(|node| node.id.as_str().to_owned())
+    else {
+        return;
+    };
+    let planned = session
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({"symbol": id.clone(), "new_name": "locate_target"}),
+        )
+        .expect("declared tool");
+    let Some(token) = planned.get("confirmToken").and_then(Value::as_str) else {
+        panic!("a closed gate must still preview: {planned:?}");
+    };
+
+    let applied = session
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({
+                "symbol": id,
+                "new_name": "locate_target",
+                "mode": "apply",
+                "confirm_token": token.to_owned(),
+            }),
+        )
+        .expect("declared tool");
+    assert_eq!(status(&applied), "WRITE_GATE_CLOSED", "{applied:?}");
+    let core = fs::read_to_string(root.join("src/core.rs")).expect("core");
+    assert!(core.contains("resolve_target"), "got {core:?}");
+    assert!(!core.contains("locate_target"), "got {core:?}");
 }
 
 /// The graph records a symbol's span as its declaration line, and a call lives in the body one
@@ -546,5 +603,68 @@ fn unproven_same_named_occurrences_are_reported_rather_than_renamed() {
             .iter()
             .any(|warning| warning.as_str() == Some("GRAPH_PROVEN_SITES_ONLY")),
         "the limit of the backend has to be stated on every plan"
+    );
+}
+
+#[test]
+fn python_rename_keeps_exact_recursive_imported_top_level_and_f_string_calls() {
+    let root = repository(
+        "python-calls",
+        &[
+            (
+                "src/core.py",
+                "def resolve_target(selector: str) -> str:\n    if selector.startswith('#'):\n        return resolve_target(selector[1:])\n    return selector.strip()\n\ndef resolve_target_path(selector: str) -> str:\n    return f\"/{resolve_target(selector)}\"\n",
+            ),
+            (
+                "src/caller.py",
+                "from src.core import resolve_target, resolve_target_path\n\ndef run(value: str) -> str:\n    return resolve_target(value) + resolve_target_path(value)\n",
+            ),
+            (
+                "src/toplevel.py",
+                "from src.core import resolve_target\n\nDEFAULT_TARGET = resolve_target('#main')\n",
+            ),
+            (
+                "src/shadow.py",
+                "def resolve_target(node: int) -> int:\n    return node * 2\n\ndef pick(node: int) -> int:\n    return resolve_target(node)\n",
+            ),
+        ],
+    );
+    let engine = Weavatrix::open(&root).expect("opens");
+    let state = engine.state().clone();
+    let id = state
+        .graph()
+        .nodes()
+        .iter()
+        .find(|node| {
+            node.label == "resolve_target"
+                && node
+                    .span
+                    .as_ref()
+                    .is_some_and(|span| span.file == "src/core.py")
+        })
+        .map(|node| node.id.as_str().to_owned())
+        .expect("target declaration");
+    let planned = RefactorSession::read_only()
+        .call(
+            &state,
+            "rename_symbol",
+            &json!({"symbol": id, "new_name": "locate_target"}),
+        )
+        .expect("declared tool");
+
+    assert_eq!(status(&planned), "PLANNED", "{planned:?}");
+    assert_eq!(planned.get("renamedEdits").and_then(Value::as_u64), Some(7));
+    let uncertain = planned
+        .get("uncertainReferences")
+        .and_then(Value::as_array)
+        .expect("uncertain references");
+    assert!(
+        uncertain.iter().all(|entry| {
+            entry
+                .get("excerpt")
+                .and_then(Value::as_str)
+                .is_none_or(|excerpt| !excerpt.contains("resolve_target("))
+        }),
+        "proved Python calls must not remain uncertain: {uncertain:?}"
     );
 }

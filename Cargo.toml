@@ -1,6 +1,6 @@
 ﻿[package]
 name = "weavatrix-rust-refactor"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 rust-version = "1.89"
 description = "Evidence-backed refactor operations for Weavatrix: plan production, transactional application, and rollback"
@@ -21,8 +21,8 @@ blazingly-json = "0.1.0"
 # structurally identical ones that will not convert.
 regex = "1"
 weavatrix-graph = "0.6.3"
-weavatrix-rust = { version = "2.4.0", features = ["full"] }
-weavatrix-parse = "0.3.0"
+weavatrix-rust = { version = "2.5.1", path = "../weavatrix-rust", features = ["full"] }
+weavatrix-parse = { version = "0.3.1", path = "../weavatrix-parse" }
 weavatrix-refactor-plan = "0.1.1"
 weavatrix-worktree = "0.2.0"
 

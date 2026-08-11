@@ -60,6 +60,12 @@ contract fails to compile rather than answering "not supported" at run time.
 | `apply_edit_plan` | `weavatrix-worktree` | Preview, single-use token, atomic write with retained contents |
 | `rollback_last_apply` | `weavatrix-worktree` | The previous contents, restored |
 
+`rename_symbol` and `rename_related_symbols` own their complete two-phase workflow: preview
+returns a plan-bound confirmation token, and repeating the same operation with identical rename
+arguments, `mode="apply"`, and that token applies the recomputed plan. The agent never has to
+echo the edit plan into `apply_edit_plan`; that generic tool remains available for plans produced
+by the other operations or by an external planner.
+
 ### What "PARTIAL" means here
 
 No planner claims `COMPLETE`. Every call site comes from a graph edge, so these

@@ -80,21 +80,10 @@ fn list_at(source: &Source, code: &[&Token], name: &str, line: u32) -> Option<Li
 
 /// Lines the graph proves call this symbol, by file.
 ///
-/// The edge points at the calling symbol, whose recorded span is its declaration line; the call
-/// is somewhere in its body, so each one is widened to the range that body occupies.
+/// Current graph edges carry the call expression's exact source line. The shared resolver keeps
+/// a proven-body fallback for older evidence that only identifies the calling symbol.
 fn call_lines(state: &RepositoryState, id: &str) -> BTreeMap<String, BTreeSet<u32>> {
-    let mut by_file: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-    for (path, symbols) in super::rename_symbol::referencing_symbols(state, id) {
-        let Some(source) = read_source(state.root(), &path) else {
-            continue;
-        };
-        let lines = by_file.entry(path.clone()).or_default();
-        for (name, line) in symbols {
-            let (from, to) = crate::declaration::body_lines(&source, &path, &name, line);
-            lines.extend(from..=to);
-        }
-    }
-    by_file
+    super::rename_symbol::referencing_lines(state, id)
 }
 
 /// The (line, byte column) of a byte offset, both 1-based.

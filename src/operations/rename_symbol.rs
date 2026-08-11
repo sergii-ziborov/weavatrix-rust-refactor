@@ -16,7 +16,7 @@ use crate::plan::{PlanBuilder, sha256_of};
 use crate::resolve::resolve_symbol;
 use blazingly_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use weavatrix_parse::{Language, TokenKind, tokenize};
+use weavatrix_parse::{Language, Token, TokenKind, tokenize};
 use weavatrix_rust::{EdgeKind, NodeKind, RepositoryState};
 
 /// Relations that mean "this site uses that symbol", as opposed to containing it.
@@ -66,18 +66,25 @@ fn occurrences_on_line(source: &str, line: u32, name: &str) -> Vec<(u32, u32)> {
     hits
 }
 
-/// The symbols the graph proves reference this one, by file: each one's name and declaring line.
+/// Exact lines the graph proves reference this symbol, grouped by file.
 ///
-/// A use edge points at the *referencing symbol*, and the graph records that symbol's span as its
-/// declaration line alone. The reference itself sits somewhere in the body, so the caller widens
-/// each of these to its body range once the file has been read.
-pub(super) fn referencing_symbols(
+/// Current edges carry the reference expression's own span, including module-level calls that
+/// have no enclosing symbol. Older/fallback edges may carry only a source symbol; those are
+/// widened to that declaration's proven body without turning an unbounded guess into evidence.
+pub(super) fn referencing_lines(
     state: &RepositoryState,
     id: &str,
-) -> BTreeMap<String, Vec<(String, u32)>> {
-    let mut by_file: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
+) -> BTreeMap<String, BTreeSet<u32>> {
+    let mut by_file: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
     for edge in state.graph().edges() {
         if !is_use(&edge.kind) || edge.target.as_str() != id {
+            continue;
+        }
+        if let Some(span) = edge.provenance.span.as_ref() {
+            by_file
+                .entry(span.file.clone())
+                .or_default()
+                .insert(span.start.line);
             continue;
         }
         let Some(node) = state
@@ -91,22 +98,21 @@ pub(super) fn referencing_symbols(
         let Some(span) = node.span.as_ref() else {
             continue;
         };
-        by_file.entry(span.file.clone()).or_default().push((
-            node.label.trim_end_matches("()").to_owned(),
+        let Some(source) = read_source(state.root(), &span.file) else {
+            continue;
+        };
+        let (from, to) = crate::declaration::body_lines(
+            &source,
+            &span.file,
+            node.label.trim_end_matches("()"),
             span.start.line,
-        ));
+        );
+        by_file
+            .entry(span.file.clone())
+            .or_default()
+            .extend(from..=to);
     }
     by_file
-}
-
-/// Every line of a file the graph attributes to this symbol.
-fn proven_lines(source: &str, path: &str, referencing: &[(String, u32)]) -> BTreeSet<u32> {
-    let mut lines = BTreeSet::new();
-    for (name, line) in referencing {
-        let (from, to) = crate::declaration::body_lines(source, path, name, *line);
-        lines.extend(from..=to);
-    }
-    lines
 }
 
 /// Files the graph proves import the one that declares the symbol.
@@ -178,17 +184,24 @@ fn identifier_offsets(
     if depth > 4 {
         return;
     }
-    for token in tokenize(slice, language) {
+    let tokens = tokenize(slice, language);
+    for (index, token) in tokens.iter().enumerate() {
         match token.kind {
             TokenKind::Identifier if token.text(slice) == name => {
                 out.push((base + token.start, base + token.end));
             }
             TokenKind::String | TokenKind::Interpolation => {
                 let text = token.text(slice);
-                if !text.starts_with('`') && token.kind == TokenKind::String {
-                    continue;
-                }
-                for (inner_start, inner_end) in interpolation_sections(text) {
+                let sections = if token.kind == TokenKind::Interpolation || text.starts_with('`') {
+                    interpolation_sections(text)
+                } else if language == Language::Python
+                    && python_f_string_prefix(&tokens, index, slice)
+                {
+                    python_f_string_sections(text)
+                } else {
+                    Vec::new()
+                };
+                for (inner_start, inner_end) in sections {
                     if let Some(inner) = text.get(inner_start..inner_end) {
                         identifier_offsets(
                             inner,
@@ -204,6 +217,72 @@ fn identifier_offsets(
             _ => {}
         }
     }
+}
+
+fn python_f_string_prefix(tokens: &[Token], index: usize, source: &str) -> bool {
+    index
+        .checked_sub(1)
+        .filter(|previous| tokens[*previous].end == tokens[index].start)
+        .filter(|previous| tokens[*previous].kind == TokenKind::Identifier)
+        .map(|previous| tokens[previous].text(source).to_ascii_lowercase())
+        .is_some_and(|prefix| {
+            prefix.contains('f')
+                && prefix
+                    .chars()
+                    .all(|character| matches!(character, 'f' | 'r' | 'b' | 'u'))
+        })
+}
+
+/// Executable `{...}` sections of a Python f-string; doubled braces stay literal text.
+fn python_f_string_sections(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut sections = Vec::new();
+    let mut at = 0_usize;
+    while at < bytes.len() {
+        if bytes[at] != b'{' {
+            at += 1;
+            continue;
+        }
+        if bytes.get(at + 1) == Some(&b'{') {
+            at += 2;
+            continue;
+        }
+        let start = at + 1;
+        let mut cursor = start;
+        let mut depth = 1_u32;
+        let mut quote = None;
+        let mut escaped = false;
+        while cursor < bytes.len() {
+            let byte = bytes[cursor];
+            if let Some(delimiter) = quote {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == delimiter {
+                    quote = None;
+                }
+                cursor += 1;
+                continue;
+            }
+            match byte {
+                b'\'' | b'"' => quote = Some(byte),
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        sections.push((start, cursor));
+                        cursor += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        at = cursor.max(at + 1);
+    }
+    sections
 }
 
 /// The interiors of every balanced `${...}` in a template literal's text.
@@ -346,12 +425,12 @@ pub(super) fn sites(
     };
 
     let id = node.id.as_str().to_owned();
-    let mut referencing = referencing_symbols(state, &id);
-    // The declaration itself is a site, and its own body is where a recursive call would be.
+    let mut referencing = referencing_lines(state, &id);
+    // The declaration itself is always a site. Recursive calls arrive as their own exact edges.
     referencing
         .entry(file.clone())
         .or_default()
-        .push((old_name.clone(), span.start.line));
+        .insert(span.start.line);
     let importing = importing_files(state, &file);
     for path in &importing {
         referencing.entry(path.clone()).or_default();
@@ -362,7 +441,7 @@ pub(super) fn sites(
         files: BTreeMap::new(),
         uncertain: Vec::new(),
     };
-    for (path, symbols) in &referencing {
+    for (path, proven) in &referencing {
         let Some(source) = read_source(state.root(), path) else {
             found.uncertain.push(json!({
                 "file": path,
@@ -370,7 +449,7 @@ pub(super) fn sites(
             }));
             continue;
         };
-        let mut proven = proven_lines(&source, path, symbols);
+        let mut proven = proven.clone();
         if importing.contains(path) {
             proven.extend(import_lines(&source, &found.old_name));
         }
@@ -479,6 +558,7 @@ pub(super) fn rename_symbol(
     state: &RepositoryState,
     tokens: &crate::token::TokenStore,
     arguments: &Value,
+    write_allowed: bool,
 ) -> Value {
     let symbol = arguments.get("symbol").and_then(Value::as_str);
     let new_name = arguments.get("new_name").and_then(Value::as_str);
@@ -490,6 +570,15 @@ pub(super) fn rename_symbol(
         Err(refusal) => return refusal,
     };
     let plan = build_plan("rename_symbol", std::slice::from_ref(&found));
+    if arguments.get("mode").and_then(Value::as_str) == Some("apply") {
+        return super::apply::apply_generated_plan(
+            state.root(),
+            tokens,
+            &plan,
+            arguments.get("confirm_token").and_then(Value::as_str),
+            write_allowed,
+        );
+    }
     let mut answer = json!({
         "status": "PLANNED",
         // Never COMPLETE: this backend proves the sites it renames, not the absence of others.
@@ -501,9 +590,9 @@ pub(super) fn rename_symbol(
         "plan": plan,
         "uncertainReferences": found.uncertain,
         "warnings": ["GRAPH_PROVEN_SITES_ONLY"],
-        "next": "apply with apply_edit_plan {mode: \"apply\", confirm_token}. Every \
-                 uncertainReference is a same-named occurrence this backend refused to guess at; \
-                 review them yourself.",
+        "next": "call rename_symbol again with the identical symbol and new_name, \
+                 mode=\"apply\", and this confirm_token. Every uncertainReference is a \
+                 same-named occurrence this backend refused to guess at; review them yourself.",
     });
     // The plan is previewed here rather than by a second call, and the confirmation rides in
     // this answer. The agent then applies with the token alone — it never has to echo back the

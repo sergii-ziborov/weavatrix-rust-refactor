@@ -61,6 +61,43 @@ fn is_stale(error: &WorktreeError) -> bool {
     )
 }
 
+/// Applies a plan that a producing operation has just recomputed from the current graph.
+///
+/// The caller never supplies this plan. It repeats the operation arguments and presents the
+/// preview token; consuming that token against the recomputed envelope proves the apply still
+/// names exactly what was previewed.
+pub(super) fn apply_generated_plan(
+    root: &std::path::Path,
+    tokens: &TokenStore,
+    plan_value: &Value,
+    confirm_token: Option<&str>,
+    write_allowed: bool,
+) -> Value {
+    if !write_allowed {
+        return json!({
+            "status": "WRITE_GATE_CLOSED",
+            "reason": "the server was started without source edits enabled",
+        });
+    }
+    let plan = match read_envelope(plan_value) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return json!({
+                "status": error.code,
+                "reason": error.reason,
+            });
+        }
+    };
+    if let Some(refusal) = tokens.consume(confirm_token, &plan, root) {
+        return refusal;
+    }
+    let tree = match worktree(root) {
+        Ok(tree) => tree,
+        Err(refusal) => return refusal,
+    };
+    write_plan(&tree, &plan)
+}
+
 /// `apply_edit_plan`: preview verifies, apply writes.
 ///
 /// An apply may present the confirmation alone. The preview already carried the plan to the
