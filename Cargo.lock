@@ -670,7 +670,8 @@ dependencies = [
 [[package]]
 name = "weavatrix-parse"
 version = "0.3.1"
-source = "git+https://github.com/sergii-ziborov/weavatrix-parse.git?rev=49d8bb64a4e744b03b767e77cbf4452a535904b8#49d8bb64a4e744b03b767e77cbf4452a535904b8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42660d50463fac9b5a72d08c8648b7ebcdf30d5633bb60c66a74176f4e3a6ad6"
 
 [[package]]
 name = "weavatrix-refactor-plan"
@@ -691,7 +692,8 @@ dependencies = [
 [[package]]
 name = "weavatrix-rust"
 version = "2.5.1"
-source = "git+https://github.com/sergii-ziborov/weavatrix-rust.git?rev=6f4b130761d1e5bdfa599b72a76324e13db0b018#6f4b130761d1e5bdfa599b72a76324e13db0b018"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2095394e2a6d86640df45dbcafd4a310b4001456842dd2cce26db79526218963"
 dependencies = [
  "blazingly-json",
  "proc-macro2",
@@ -763,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "weavatrix-worktree"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e57d18a5836ba9fe974b0456920f7d504d47d52fb04e474e910a90edb8480b5c"
+checksum = "13c781ef68e60ebc97c2a05ce6ab20a5e1a90fba5d0cf7bb48fe4ee8abe26990"
 dependencies = [
  "blazingly-json",
  "cap-fs-ext",

@@ -21,10 +21,10 @@ blazingly-json = "0.1.0"
 # structurally identical ones that will not convert.
 regex = "1"
 weavatrix-graph = "0.6.3"
-weavatrix-rust = { version = "2.5.1", git = "https://github.com/sergii-ziborov/weavatrix-rust.git", rev = "6f4b130761d1e5bdfa599b72a76324e13db0b018", features = ["full"] }
-weavatrix-parse = { version = "0.3.1", git = "https://github.com/sergii-ziborov/weavatrix-parse.git", rev = "49d8bb64a4e744b03b767e77cbf4452a535904b8" }
+weavatrix-rust = { version = "2.5.1", features = ["full"] }
+weavatrix-parse = "0.3.1"
 weavatrix-refactor-plan = "0.1.1"
-weavatrix-worktree = "0.2.0"
+weavatrix-worktree = "0.2.1"
 
 [dev-dependencies]
 tempfile = "3"
