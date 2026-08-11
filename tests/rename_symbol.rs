@@ -246,8 +246,8 @@ fn an_ambiguous_refusal_names_its_candidates() {
     );
 }
 
-/// An apply may present the confirmation alone: the preview already carried the plan, and making
-/// the agent echo it back is paying for the same bytes twice.
+/// The rename previews its own plan and hands over the confirmation, so the whole flow is two
+/// calls and the agent never echoes plan bytes back: rename -> apply {confirm_token}.
 #[test]
 fn applying_with_the_token_alone_writes_the_previewed_plan() {
     let root = repository("tokenonly", &FILES);
@@ -276,12 +276,13 @@ fn applying_with_the_token_alone_writes_the_previewed_plan() {
             &json!({"symbol": id, "new_name": "locate_target"}),
         )
         .expect("declared tool");
-    let plan = planned.get("plan").expect("plan").clone();
-    let preview = session
-        .call(&state, "apply_edit_plan", &json!({"plan": plan}))
-        .expect("declared tool");
-    let Some(token) = preview.get("confirmToken").and_then(Value::as_str) else {
-        panic!("{preview:?}");
+    assert_eq!(
+        planned.get("previewed").and_then(Value::as_bool),
+        Some(true),
+        "the rename must have dry-run its own plan: {planned:?}"
+    );
+    let Some(token) = planned.get("confirmToken").and_then(Value::as_str) else {
+        panic!("{planned:?}");
     };
     let applied = session
         .call(

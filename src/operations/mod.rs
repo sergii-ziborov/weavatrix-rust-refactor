@@ -77,7 +77,7 @@ impl RefactorSession {
             Operation::MoveSymbol => move_symbol::move_symbol(state, arguments),
             Operation::MoveFile => move_file::move_file(state, arguments),
             Operation::OrganizeImports => organize_imports::organize_imports(state, arguments),
-            Operation::RenameSymbol => rename_symbol::rename_symbol(state, arguments),
+            Operation::RenameSymbol => rename_symbol::rename_symbol(state, &self.tokens, arguments),
             Operation::RenameRelatedSymbols => rename_related::rename_related_symbols(
                 state,
                 &self.tokens,

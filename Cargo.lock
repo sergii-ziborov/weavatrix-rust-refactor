@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "weavatrix-rust-refactor"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "blazingly-json",
  "regex",

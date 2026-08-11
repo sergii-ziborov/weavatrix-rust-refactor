@@ -475,7 +475,11 @@ pub(super) fn build_plan(operation: &str, renames: &[Rename]) -> Value {
     builder.build()
 }
 
-pub(super) fn rename_symbol(state: &RepositoryState, arguments: &Value) -> Value {
+pub(super) fn rename_symbol(
+    state: &RepositoryState,
+    tokens: &crate::token::TokenStore,
+    arguments: &Value,
+) -> Value {
     let symbol = arguments.get("symbol").and_then(Value::as_str);
     let new_name = arguments.get("new_name").and_then(Value::as_str);
     let (Some(symbol), Some(new_name)) = (symbol, new_name) else {
@@ -485,7 +489,8 @@ pub(super) fn rename_symbol(state: &RepositoryState, arguments: &Value) -> Value
         Ok(found) => found,
         Err(refusal) => return refusal,
     };
-    json!({
+    let plan = build_plan("rename_symbol", std::slice::from_ref(&found));
+    let mut answer = json!({
         "status": "PLANNED",
         // Never COMPLETE: this backend proves the sites it renames, not the absence of others.
         "completeness": "PARTIAL",
@@ -493,10 +498,51 @@ pub(super) fn rename_symbol(state: &RepositoryState, arguments: &Value) -> Value
         "oldName": found.old_name,
         "newName": found.new_name,
         "renamedEdits": found.edits(),
-        "plan": build_plan("rename_symbol", std::slice::from_ref(&found)),
+        "plan": plan,
         "uncertainReferences": found.uncertain,
         "warnings": ["GRAPH_PROVEN_SITES_ONLY"],
-        "next": "apply with apply_edit_plan (preview -> confirm). Every uncertainReference is a \
-                 same-named occurrence this backend refused to guess at; review them yourself.",
-    })
+        "next": "apply with apply_edit_plan {mode: \"apply\", confirm_token}. Every \
+                 uncertainReference is a same-named occurrence this backend refused to guess at; \
+                 review them yourself.",
+    });
+    // The plan is previewed here rather than by a second call, and the confirmation rides in
+    // this answer. The agent then applies with the token alone — it never has to echo back the
+    // plan bytes it just received, which the benchmark measured as the largest single cost of
+    // the whole flow.
+    if let Some(preview) = preview_plan(state, tokens, answer.get("plan")) {
+        if let (Some(object), Some(extra)) = (answer.as_object_mut(), preview.as_object()) {
+            for (key, value) in extra {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    answer
+}
+
+/// Dry-runs a freshly built plan and issues its confirmation, or reports why it could not.
+///
+/// A failure here is not a failure of the rename: the plan is still returned and can be
+/// previewed explicitly. What must never happen is a token for a plan the working tree would
+/// reject — so the token only exists when the dry run passed.
+fn preview_plan(
+    state: &RepositoryState,
+    tokens: &crate::token::TokenStore,
+    plan: Option<&Value>,
+) -> Option<Value> {
+    let envelope = crate::envelope::read_envelope(plan?).ok()?;
+    let tree = weavatrix_worktree::Worktree::open(state.root()).ok()?;
+    match tree.dry_run(&envelope) {
+        Ok(_) => {
+            let token = tokens.issue(&envelope, state.root());
+            Some(json!({
+                "previewed": true,
+                "confirmToken": token.value,
+                "expiresAt": token.expires_at,
+            }))
+        }
+        Err(error) => Some(json!({
+            "previewed": false,
+            "previewBlocked": format!("{error}"),
+        })),
+    }
 }
