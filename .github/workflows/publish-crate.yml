@@ -2,14 +2,8 @@ name: Publish crate
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - .github/workflows/publish-crate.yml
   workflow_dispatch:
     inputs:
       authentication:
